@@ -1,112 +1,177 @@
 'use client'
-import { useEffect, useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useParams } from 'next/navigation'
 import { toast } from 'sonner'
+import { ArrowLeft, ArrowRight, CheckCircle, ShieldCheck } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { formatCurrency, formatDate, computeStatus } from '@/lib/utils'
-import { TransferRow } from '@/types'
+import { formatCurrency, formatDate } from '@/lib/utils'
+import type { AppRole, TransferRow, TransferStatus } from '@/types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { Card } from '@/components/ui/card'
 import { StatusBadge } from '@/components/status-badge'
-import { ArrowLeft, ArrowRight, RotateCcw, Trash2 } from 'lucide-react'
-import { Dialog } from '@/components/ui/dialog'
+
+type Profile = {
+  branch_id: string | null
+  role: AppRole
+}
+
+function lineSentValue(line: TransferRow['transfer_lines'][number]) {
+  return Number(line.quantity_sent) * Number(line.unit_price_snapshot)
+}
+
+function lineReceivedValue(line: TransferRow['transfer_lines'][number]) {
+  return Number(line.quantity_received ?? 0) * Number(line.unit_price_snapshot)
+}
 
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const router = useRouter()
 
   const [transfer, setTransfer] = useState<TransferRow | null>(null)
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
-
-  const [returnQty, setReturnQty] = useState('')
-  const [returnDate, setReturnDate] = useState(() => new Date().toISOString().split('T')[0])
-  const [returnNote, setReturnNote] = useState('')
+  const [receivedQuantities, setReceivedQuantities] = useState<Record<string, string>>({})
+  const [receiptNote, setReceiptNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [adminStatus, setAdminStatus] = useState<TransferStatus>('admin_resolved')
+  const [adminNotes, setAdminNotes] = useState('')
+  const [resolving, setResolving] = useState(false)
 
-  async function load() {
-    const { data, error } = await supabase
-      .from('transfers')
-      .select('id, date, return_date, quantity, quantity_returned, status, notes, from_branch:branches!from_branch_id(id,name,location), to_branch:branches!to_branch_id(id,name,location), item:items(id,name,unit,price_per_unit)')
-      .eq('id', id)
-      .single()
+  const load = useCallback(async () => {
+    setLoading(true)
+    const { data: sessionResult } = await supabase.auth.getSession()
+    const userId = sessionResult.session?.user.id
 
-    if (error || !data) { setNotFound(true); setLoading(false); return }
-    setTransfer(data as unknown as TransferRow)
-    setLoading(false)
-  }
+    const [transferResult, profileResult] = await Promise.all([
+      supabase
+        .from('transfers')
+        .select('id, status, sent_at, received_at, resolved_at, notes, admin_notes, sender_branch_id, receiver_branch_id, sender_branch:branches!sender_branch_id(id,name,location), receiver_branch:branches!receiver_branch_id(id,name,location), transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit)), transfer_events(id, transfer_id, actor_id, event_type, details, created_at)')
+        .eq('id', id)
+        .single(),
+      userId
+        ? supabase
+            .from('user_profiles')
+            .select('branch_id, role')
+            .eq('id', userId)
+            .maybeSingle()
+        : Promise.resolve({ data: null }),
+    ])
 
-  useEffect(() => { if (id) load() }, [id])
-
-  async function handleReturn(e: React.FormEvent) {
-    e.preventDefault()
-    if (!transfer) return
-    const incoming = parseFloat(returnQty)
-    if (isNaN(incoming) || incoming <= 0) { toast.error('Enter a valid return quantity'); return }
-
-    const currentReturned = Number(transfer.quantity_returned)
-    const totalReturned = currentReturned + incoming
-    const maxReturnable = Number(transfer.quantity) - currentReturned
-
-    if (incoming > maxReturnable) {
-      toast.error(`Maximum returnable: ${maxReturnable} ${transfer.item?.unit}`)
+    if (transferResult.error || !transferResult.data) {
+      setNotFound(true)
+      setLoading(false)
       return
     }
 
+    const nextTransfer = transferResult.data as unknown as TransferRow
+    setTransfer(nextTransfer)
+    setProfile((profileResult.data as Profile | null) ?? null)
+    setReceivedQuantities(
+      Object.fromEntries(
+        nextTransfer.transfer_lines.map(line => [
+          line.id,
+          String(line.quantity_received ?? line.quantity_sent),
+        ])
+      )
+    )
+    setLoading(false)
+  }, [id])
+
+  useEffect(() => { if (id) load() }, [id, load])
+
+  const totals = useMemo(() => {
+    const sent = transfer?.transfer_lines.reduce((sum, line) => sum + lineSentValue(line), 0) ?? 0
+    const received = transfer?.transfer_lines.reduce((sum, line) => sum + lineReceivedValue(line), 0) ?? 0
+    return {
+      sent,
+      received,
+      discrepancy: Math.abs(sent - received),
+    }
+  }, [transfer])
+
+  const canReceive =
+    transfer?.status === 'pending_receipt'
+    && (profile?.role === 'super_admin' || profile?.branch_id === transfer.receiver_branch_id)
+
+  const canAdminResolve =
+    profile?.role === 'super_admin'
+    && transfer?.status !== 'confirmed'
+    && transfer?.status !== 'admin_resolved'
+    && transfer?.status !== 'cancelled'
+
+  async function handleReceive(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!transfer) return
+
+    const lines = transfer.transfer_lines.map(line => ({
+      line_id: line.id,
+      quantity_received: Number(receivedQuantities[line.id]),
+    }))
+
+    for (const line of lines) {
+      if (!Number.isFinite(line.quantity_received) || line.quantity_received < 0) {
+        toast.error('Received quantities must be zero or greater.')
+        return
+      }
+    }
+
     setSubmitting(true)
-    const newStatus = computeStatus(Number(transfer.quantity), totalReturned)
-    const { error } = await supabase
-      .from('transfers')
-      .update({
-        quantity_returned: totalReturned,
-        status: newStatus,
-        return_date: new Date(returnDate).toISOString(),
-        notes: returnNote.trim()
-          ? [transfer.notes, `Return note: ${returnNote.trim()}`].filter(Boolean).join(' | ')
-          : transfer.notes,
-      })
-      .eq('id', id)
-
-    if (error) { toast.error(error.message); setSubmitting(false); return }
-    toast.success(newStatus === 'returned' ? 'Fully returned — transfer closed' : 'Partial return logged')
-    setReturnQty(''); setReturnNote('')
+    const { data, error } = await supabase.rpc('receive_transfer', {
+      p_transfer_id: transfer.id,
+      p_lines: lines,
+      p_notes: receiptNote.trim() || null,
+    })
     setSubmitting(false)
-    load()
+
+    if (error) {
+      toast.error(error.message)
+      return
+    }
+
+    toast.success(data === 'confirmed' ? 'Transfer confirmed' : 'Mismatch sent to admin review')
+    setReceiptNote('')
+    await load()
   }
 
-  async function handleDelete() {
-    const { error } = await supabase.from('transfers').delete().eq('id', id)
-    if (error) { toast.error(error.message); return }
-    toast.success('Transfer deleted')
-    router.push('/transfers')
+  async function handleAdminResolve(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!transfer) return
+
+    setResolving(true)
+    const { error } = await supabase.rpc('admin_resolve_transfer', {
+      p_transfer_id: transfer.id,
+      p_status: adminStatus,
+      p_admin_notes: adminNotes.trim() || null,
+    })
+    setResolving(false)
+
+    if (error) {
+      toast.error(error.message)
+      return
+    }
+
+    toast.success('Transfer resolved')
+    setAdminNotes('')
+    await load()
   }
 
-  if (loading) return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">Loading…</div>
+  if (loading) return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">Loading...</div>
   if (notFound) return (
     <div className="px-8 py-8">
       <p className="text-sm text-[#888888]">Transfer not found.</p>
-      <Link href="/transfers" className="text-xs text-[#E8231A] hover:underline mt-2 inline-block">← Back to transfers</Link>
+      <Link href="/transfers" className="text-xs text-[#E8231A] hover:underline mt-2 inline-block">Back to transfers</Link>
     </div>
   )
   if (!transfer) return null
 
-  const qty = Number(transfer.quantity)
-  const returned = Number(transfer.quantity_returned)
-  const outstanding = qty - returned
-  const price = Number(transfer.item?.price_per_unit ?? 0)
-  const valueBorrowed = qty * price
-  const valueReturned = returned * price
-  const valueOutstanding = outstanding * price
-  const isFullyReturned = returned >= qty
-
   return (
-    <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-3xl">
-      {/* Header */}
+    <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-4xl">
       <div className="flex items-start justify-between mb-8">
         <div className="flex items-center gap-3">
           <Link href="/transfers">
@@ -117,137 +182,170 @@ export default function TransferDetailPage() {
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-semibold text-[#111111]">Transfer Detail</h1>
-              <StatusBadge quantity={qty} quantityReturned={returned} />
+              <StatusBadge status={transfer.status} />
             </div>
-            <p className="text-xs text-[#444444] font-mono mt-1">{id}</p>
+            <p className="text-xs text-[#444444] font-mono mt-1">{transfer.id}</p>
           </div>
         </div>
-        <button
-          onClick={() => setDeleteOpen(true)}
-          className="p-2 text-[#333333] hover:text-red-400 transition-colors"
-          title="Delete transfer"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
       </div>
 
       <div className="grid gap-5">
-        {/* Transfer Info */}
-        <Card>
-          <div className="p-5">
-            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Transfer Info</p>
-            <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-              <InfoRow label="Date" value={formatDate(transfer.date)} />
-              <InfoRow
-                label="Route"
-                value={
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-[#888888]">{transfer.from_branch?.name}</span>
-                    <ArrowRight className="h-3 w-3 text-[#333333] shrink-0" />
-                    <span className="text-[#111111] font-medium">{transfer.to_branch?.name}</span>
-                  </span>
-                }
-              />
-              <InfoRow label="Item" value={<span>{transfer.item?.name} <span className="text-[#888888]">({transfer.item?.unit})</span></span>} />
-              <InfoRow label="Price / Unit" value={<span className="font-mono">{formatCurrency(price)}</span>} />
-              {transfer.notes && (
-                <div className="col-span-2">
-                  <p className="text-xs text-[#444444] uppercase tracking-wider mb-1">Notes</p>
-                  <p className="text-sm text-[#888888]">{transfer.notes}</p>
-                </div>
-              )}
-            </div>
+        <Card className="p-5">
+          <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Movement Info</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
+            <InfoRow label="Sent Date" value={formatDate(transfer.sent_at)} />
+            <InfoRow
+              label="Route"
+              value={
+                <span className="flex items-center gap-1.5">
+                  <span className="text-[#888888]">{transfer.sender_branch?.name}</span>
+                  <ArrowRight className="h-3 w-3 text-[#333333] shrink-0" />
+                  <span className="text-[#111111] font-medium">{transfer.receiver_branch?.name}</span>
+                </span>
+              }
+            />
+            {transfer.received_at && <InfoRow label="Received Date" value={formatDate(transfer.received_at)} />}
+            {transfer.resolved_at && <InfoRow label="Resolved Date" value={formatDate(transfer.resolved_at)} />}
+            {transfer.notes && <InfoRow label="Notes" value={transfer.notes} />}
+            {transfer.admin_notes && <InfoRow label="Admin Notes" value={transfer.admin_notes} />}
           </div>
         </Card>
 
-        {/* Financial Summary */}
-        <div className="grid grid-cols-3 sm:grid-cols-3 gap-3">
-          <FinancialCard label="Borrowed" qty={qty} unit={transfer.item?.unit ?? ''} value={valueBorrowed} />
-          <FinancialCard label="Returned" qty={returned} unit={transfer.item?.unit ?? ''} value={valueReturned} color="green" />
-          <FinancialCard label="Outstanding" qty={outstanding} unit={transfer.item?.unit ?? ''} value={valueOutstanding} color={outstanding > 0 ? 'amber' : 'green'} />
+        <Card>
+          <div className="p-5 border-b border-[#E5E5E5]">
+            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider">Transfer Lines</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[#F0F0F0] text-left text-xs text-[#888888]">
+                  <th className="px-5 py-3 font-medium">Item</th>
+                  <th className="px-5 py-3 font-medium text-right">Sent</th>
+                  <th className="px-5 py-3 font-medium text-right">Received</th>
+                  <th className="px-5 py-3 font-medium text-right">Value</th>
+                  <th className="px-5 py-3 font-medium text-right">Difference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transfer.transfer_lines.map(line => {
+                  const difference = Number(line.quantity_received ?? 0) - Number(line.quantity_sent)
+                  return (
+                    <tr key={line.id} className="border-b border-[#F7F7F7] last:border-0">
+                      <td className="px-5 py-3">
+                        <p className="font-medium text-[#111111]">{line.item?.name}</p>
+                        <p className="text-xs text-[#888888]">{line.item?.unit} · {formatCurrency(Number(line.unit_price_snapshot))}</p>
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono">{Number(line.quantity_sent)}</td>
+                      <td className="px-5 py-3 text-right font-mono">
+                        {line.quantity_received === null ? '-' : Number(line.quantity_received)}
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono">{formatCurrency(lineSentValue(line))}</td>
+                      <td className={`px-5 py-3 text-right font-mono ${difference === 0 ? 'text-[#888888]' : 'text-red-500'}`}>
+                        {line.quantity_received === null ? '-' : difference}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <FinancialCard label="Sent Value" value={totals.sent} />
+          <FinancialCard label="Received Value" value={totals.received} color="green" />
+          <FinancialCard label="Discrepancy" value={totals.discrepancy} color={totals.discrepancy > 0 ? 'red' : 'green'} />
         </div>
 
-        {/* Return Form */}
-        {!isFullyReturned && (
-          <Card>
-            <div className="p-5">
-              <div className="flex items-center gap-2 mb-4">
-                <RotateCcw className="h-4 w-4 text-[#888888]" />
-                <p className="text-sm font-medium text-[#111111]">Log Return</p>
-                <span className="text-xs text-[#444444]">({outstanding} {transfer.item?.unit} outstanding)</span>
-              </div>
-              <form onSubmit={handleReturn} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <Label htmlFor="return-qty">
-                      Quantity Returned ({transfer.item?.unit}) *
-                    </Label>
-                    <Input
-                      id="return-qty"
-                      type="number"
-                      min="0.01"
-                      max={outstanding}
-                      step="0.01"
-                      value={returnQty}
-                      onChange={e => setReturnQty(e.target.value)}
-                      placeholder={`max ${outstanding}`}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="return-date">Return Date *</Label>
-                    <Input
-                      id="return-date"
-                      type="date"
-                      value={returnDate}
-                      onChange={e => setReturnDate(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <Label htmlFor="return-note">Note (optional)</Label>
-                  <Textarea
-                    id="return-note"
-                    value={returnNote}
-                    onChange={e => setReturnNote(e.target.value)}
-                    placeholder="e.g. Returned via driver on Tuesday"
-                    className="min-h-[60px]"
-                  />
-                </div>
-                {returnQty && parseFloat(returnQty) > 0 && (
-                  <p className="text-xs text-[#888888]">
-                    Returning {returnQty} {transfer.item?.unit} ·
-                    value: <span className="text-[#111111] font-mono">{formatCurrency(parseFloat(returnQty) * price)}</span> ·
-                    remaining after: <span className="text-[#111111] font-mono">{formatCurrency(Math.max(0, outstanding - parseFloat(returnQty)) * price)}</span>
-                  </p>
-                )}
-                <div className="flex justify-end">
-                  <Button type="submit" loading={submitting}>Confirm Return</Button>
-                </div>
-              </form>
+        {canReceive && (
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <CheckCircle className="h-4 w-4 text-[#888888]" />
+              <p className="text-sm font-medium text-[#111111]">Confirm Received Quantities</p>
             </div>
+            <form onSubmit={handleReceive} className="space-y-4">
+              <div className="grid gap-3">
+                {transfer.transfer_lines.map(line => (
+                  <div key={line.id} className="grid grid-cols-[1fr,140px] gap-3 items-end">
+                    <div>
+                      <p className="text-sm font-medium text-[#111111]">{line.item?.name}</p>
+                      <p className="text-xs text-[#888888]">Sent: {Number(line.quantity_sent)} {line.item?.unit}</p>
+                    </div>
+                    <div>
+                      <Label htmlFor={`received-${line.id}`}>Received</Label>
+                      <Input
+                        id={`received-${line.id}`}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={receivedQuantities[line.id] ?? ''}
+                        onChange={e => setReceivedQuantities(current => ({ ...current, [line.id]: e.target.value }))}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div>
+                <Label htmlFor="receipt-note">Receipt Note</Label>
+                <Textarea
+                  id="receipt-note"
+                  value={receiptNote}
+                  onChange={e => setReceiptNote(e.target.value)}
+                  placeholder="Optional note about the received transfer"
+                />
+              </div>
+              <div className="flex justify-end">
+                <Button type="submit" loading={submitting}>Submit Receipt</Button>
+              </div>
+            </form>
           </Card>
         )}
 
-        {isFullyReturned && transfer.return_date && (
-          <Card className="p-4">
-            <div className="flex items-center gap-2 text-green-400">
-              <span className="h-2 w-2 rounded-full bg-green-400" />
-              <p className="text-sm font-medium">Fully returned on {formatDate(transfer.return_date)}</p>
+        {canAdminResolve && (
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <ShieldCheck className="h-4 w-4 text-[#888888]" />
+              <p className="text-sm font-medium text-[#111111]">Admin Resolution</p>
+            </div>
+            <form onSubmit={handleAdminResolve} className="space-y-4">
+              <div>
+                <Label htmlFor="admin-status">Resolution</Label>
+                <Select id="admin-status" value={adminStatus} onChange={e => setAdminStatus(e.target.value as TransferStatus)}>
+                  <option value="admin_resolved">Mark Admin Resolved</option>
+                  <option value="confirmed">Accept As Confirmed</option>
+                  <option value="cancelled">Cancel Transfer</option>
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="admin-notes">Admin Notes</Label>
+                <Textarea
+                  id="admin-notes"
+                  value={adminNotes}
+                  onChange={e => setAdminNotes(e.target.value)}
+                  placeholder="Explain the resolution"
+                />
+              </div>
+              <div className="flex justify-end">
+                <Button type="submit" loading={resolving}>Resolve Transfer</Button>
+              </div>
+            </form>
+          </Card>
+        )}
+
+        {transfer.transfer_events && transfer.transfer_events.length > 0 && (
+          <Card className="p-5">
+            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Audit Trail</p>
+            <div className="space-y-2">
+              {transfer.transfer_events.map(event => (
+                <div key={event.id} className="flex items-center justify-between gap-3 text-xs">
+                  <span className="font-medium text-[#111111]">{event.event_type.replaceAll('_', ' ')}</span>
+                  <span className="text-[#888888] font-mono">{formatDate(event.created_at)}</span>
+                </div>
+              ))}
             </div>
           </Card>
         )}
       </div>
-
-      {/* Delete Confirmation */}
-      <Dialog open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Transfer">
-        <p className="text-sm text-[#888888] mb-5">
-          Permanently delete this transfer? This action cannot be undone.
-        </p>
-        <div className="flex gap-2 justify-end">
-          <Button variant="ghost" onClick={() => setDeleteOpen(false)}>Cancel</Button>
-          <Button variant="destructive" onClick={handleDelete}>Delete</Button>
-        </div>
-      </Dialog>
     </div>
   )
 }
@@ -261,21 +359,12 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function FinancialCard({
-  label, qty, unit, value, color,
-}: {
-  label: string
-  qty: number
-  unit: string
-  value: number
-  color?: 'green' | 'amber'
-}) {
-  const valueColor = color === 'green' ? 'text-green-400' : color === 'amber' ? 'text-amber-400' : 'text-[#111111]'
+function FinancialCard({ label, value, color }: { label: string; value: number; color?: 'green' | 'red' }) {
+  const valueColor = color === 'green' ? 'text-green-400' : color === 'red' ? 'text-red-500' : 'text-[#111111]'
   return (
     <Card className="p-4">
       <p className="text-xs text-[#444444] uppercase tracking-wider mb-2">{label}</p>
-      <p className="text-base font-bold text-[#111111] font-mono tabular">{qty} <span className="text-xs text-[#444444] font-normal">{unit}</span></p>
-      <p className={`text-xs font-mono tabular mt-1 ${valueColor}`}>{formatCurrency(value)}</p>
+      <p className={`text-base font-bold font-mono tabular ${valueColor}`}>{formatCurrency(value)}</p>
     </Card>
   )
 }

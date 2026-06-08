@@ -1,6 +1,6 @@
 import type { Metadata } from 'next'
 import { DM_Sans, Space_Mono } from 'next/font/google'
-import { Nav } from '@/components/nav'
+import { AuthShell } from '@/components/auth/auth-shell'
 import { Toaster } from 'sonner'
 import './globals.css'
 
@@ -24,12 +24,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" data-scroll-behavior="smooth">
       <body className={`${dmSans.variable} ${spaceMono.variable}`}>
-        <Nav />
-        <main className="pt-14 pb-16 lg:pt-0 lg:pb-0 lg:pl-60 min-h-screen bg-white">
+        <AuthShell>
           {children}
-        </main>
+        </AuthShell>
         <Toaster
           theme="dark"
           position="bottom-right"

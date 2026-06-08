@@ -1,148 +1,163 @@
-﻿'use client'
-import { useEffect, useState } from 'react'
+'use client'
+
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { ArrowLeft, ArrowRight, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import { UNITS } from '@/lib/constants'
-import { Branch, Item } from '@/types'
+import type { AppRole, Branch, Item } from '@/types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { Card } from '@/components/ui/card'
-import { Dialog } from '@/components/ui/dialog'
-import { ItemAutocomplete } from '@/components/item-autocomplete'
-import { ArrowLeft, ArrowRight, Plus } from 'lucide-react'
-import Link from 'next/link'
+
+type Profile = {
+  branch_id: string | null
+  role: AppRole
+  branch: Pick<Branch, 'id' | 'name'> | null
+}
+
+type DraftLine = {
+  itemId: string
+  quantity: string
+}
+
+const emptyLine = (): DraftLine => ({ itemId: '', quantity: '' })
 
 export default function NewTransferPage() {
   const router = useRouter()
   const [branches, setBranches] = useState<Branch[]>([])
   const [items, setItems] = useState<Item[]>([])
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  // Transfer form
-  const [fromBranch, setFromBranch] = useState('')
-  const [toBranch, setToBranch] = useState('')
-  const [selectedItem, setSelectedItem] = useState<Item | null>(null)
-  const [quantity, setQuantity] = useState('')
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [senderBranchId, setSenderBranchId] = useState('')
+  const [receiverBranchId, setReceiverBranchId] = useState('')
+  const [sentAt, setSentAt] = useState(() => new Date().toISOString().split('T')[0])
   const [notes, setNotes] = useState('')
-
-  // Add Branch modal
-  const [branchOpen, setBranchOpen] = useState(false)
-  const [newBranchName, setNewBranchName] = useState('')
-  const [newBranchLocation, setNewBranchLocation] = useState('')
-  const [savingBranch, setSavingBranch] = useState(false)
-
-  // Add Item modal
-  const [itemOpen, setItemOpen] = useState(false)
-  const [newItemName, setNewItemName] = useState('')
-  const [newItemUnit, setNewItemUnit] = useState('')
-  const [newItemPrice, setNewItemPrice] = useState('')
-  const [savingItem, setSavingItem] = useState(false)
-
-  async function loadBranches() {
-    const { data } = await supabase.from('branches').select('*').order('name')
-    setBranches(data || [])
-  }
-
-  async function loadItems() {
-    const { data } = await supabase.from('items').select('*').order('name')
-    setItems(data || [])
-  }
+  const [lines, setLines] = useState<DraftLine[]>([emptyLine()])
 
   useEffect(() => {
     async function load() {
-      await Promise.all([loadBranches(), loadItems()])
+      const { data: sessionResult } = await supabase.auth.getSession()
+      const userId = sessionResult.session?.user.id
+
+      const [branchResult, itemResult, profileResult] = await Promise.all([
+        supabase.from('branches').select('*').order('name'),
+        supabase.from('items').select('*').order('name'),
+        userId
+          ? supabase
+              .from('user_profiles')
+              .select('branch_id, role, branch:branches(id,name)')
+              .eq('id', userId)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+      ])
+
+      setBranches(branchResult.data ?? [])
+      setItems(itemResult.data ?? [])
+      setProfile((profileResult.data as unknown as Profile | null) ?? null)
       setLoading(false)
     }
+
     load()
   }, [])
 
-  // Add Branch
-  function openAddBranch() {
-    setNewBranchName(''); setNewBranchLocation(''); setBranchOpen(true)
+  const effectiveSenderBranchId = profile?.role === 'super_admin' ? senderBranchId : profile?.branch_id
+  const senderBranch = profile?.role === 'super_admin'
+    ? branches.find(branch => branch.id === senderBranchId) ?? null
+    : profile?.branch
+  const availableReceivers = branches.filter(branch => branch.id !== effectiveSenderBranchId)
+
+  const totals = useMemo(() => {
+    return lines.reduce(
+      (sum, line) => {
+        const item = items.find(candidate => candidate.id === line.itemId)
+        const qty = Number(line.quantity)
+        return sum + (Number.isFinite(qty) && item ? qty * Number(item.price_per_unit) : 0)
+      },
+      0
+    )
+  }, [items, lines])
+
+  function updateLine(index: number, patch: Partial<DraftLine>) {
+    setLines(current => current.map((line, i) => (i === index ? { ...line, ...patch } : line)))
   }
 
-  async function saveNewBranch() {
-    if (!newBranchName.trim()) { toast.error('Branch name is required'); return }
-    setSavingBranch(true)
-    const { error } = await supabase.from('branches').insert({
-      name: newBranchName.trim(),
-      location: newBranchLocation.trim() || null,
-    })
-    if (error) { toast.error(error.message); setSavingBranch(false); return }
-    toast.success(`"${newBranchName.trim()}" added`)
-    setSavingBranch(false)
-    setBranchOpen(false)
-    await loadBranches()
+  function removeLine(index: number) {
+    setLines(current => current.length === 1 ? current : current.filter((_, i) => i !== index))
   }
 
-  // Add Item
-  function openAddItem() {
-    setNewItemName(''); setNewItemUnit(''); setNewItemPrice(''); setItemOpen(true)
-  }
-
-  async function saveNewItem() {
-    if (!newItemName.trim()) { toast.error('Item name is required'); return }
-    if (!newItemUnit) { toast.error('Select a unit'); return }
-    const priceNum = parseFloat(newItemPrice)
-    if (isNaN(priceNum) || priceNum < 0) { toast.error('Enter a valid price'); return }
-
-    setSavingItem(true)
-    const { data, error } = await supabase
-      .from('items')
-      .insert({ name: newItemName.trim(), unit: newItemUnit, price_per_unit: priceNum })
-      .select()
-      .single()
-
-    if (error) { toast.error(error.message); setSavingItem(false); return }
-    toast.success(`"${newItemName.trim()}" added`)
-    setSavingItem(false)
-    setItemOpen(false)
-    await loadItems()
-    if (data) setSelectedItem(data as Item)
-  }
-
-  // Submit Transfer
-  const qty = parseFloat(quantity) || 0
-  const subtotal = qty * Number(selectedItem?.price_per_unit ?? 0)
-
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    if (!fromBranch) { toast.error('Select the branch giving the items'); return }
-    if (!toBranch) { toast.error('Select the branch receiving the items'); return }
-    if (fromBranch === toBranch) { toast.error('From and To branches must be different'); return }
-    if (!selectedItem) { toast.error('Pick an item from the list (or add a new one)'); return }
-    if (qty <= 0) { toast.error('Quantity must be greater than 0'); return }
+
+    if (!effectiveSenderBranchId) {
+      toast.error(profile?.role === 'super_admin' ? 'Select the sender branch.' : 'Your user must be assigned to a sender branch before creating transfers.')
+      return
+    }
+
+    if (!receiverBranchId) {
+      toast.error('Select the receiving branch.')
+      return
+    }
+
+    const seenItems = new Set<string>()
+    const payloadLines = lines.map(line => ({
+      item_id: line.itemId,
+      quantity_sent: Number(line.quantity),
+    }))
+
+    for (const line of payloadLines) {
+      if (!line.item_id) {
+        toast.error('Every line needs an item.')
+        return
+      }
+
+      if (!Number.isFinite(line.quantity_sent) || line.quantity_sent <= 0) {
+        toast.error('Every line quantity must be greater than 0.')
+        return
+      }
+
+      if (seenItems.has(line.item_id)) {
+        toast.error('Each item can appear only once per transfer.')
+        return
+      }
+
+      seenItems.add(line.item_id)
+    }
 
     setSaving(true)
-    const { data, error } = await supabase.from('transfers').insert({
-      from_branch_id: fromBranch,
-      to_branch_id: toBranch,
-      item_id: selectedItem.id,
-      quantity: qty,
-      quantity_returned: 0,
-      status: 'pending',
-      date: new Date(date).toISOString(),
-      notes: notes.trim() || null,
-    }).select('id').single()
 
-    if (error) { toast.error(error.message); setSaving(false); return }
-    toast.success('Transfer logged')
-    router.push(`/transfers/${data.id}`)
+    const { data, error } = await supabase.rpc('create_transfer', {
+      p_receiver_branch_id: receiverBranchId,
+      p_lines: payloadLines,
+      p_sent_at: new Date(sentAt).toISOString(),
+      p_notes: notes.trim() || null,
+      p_sender_branch_id: profile?.role === 'super_admin' ? effectiveSenderBranchId : null,
+    })
+
+    setSaving(false)
+
+    if (error) {
+      toast.error(error.message)
+      return
+    }
+
+    toast.success('Transfer sent for receiver confirmation')
+    router.push(`/transfers/${data}`)
   }
 
   if (loading) {
-    return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">Loading…</div>
+    return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">Loading...</div>
   }
 
   return (
-    <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-2xl">
+    <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-3xl">
       <div className="flex items-center gap-3 mb-6">
         <Link href="/transfers">
           <button className="text-[#444444] hover:text-[#111111] transition-colors">
@@ -150,124 +165,119 @@ export default function NewTransferPage() {
           </button>
         </Link>
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Log Transfer</h1>
-          <p className="text-sm text-[#888888] mt-0.5">Record an inter-branch item loan</p>
+          <h1 className="text-xl font-semibold text-[#111111]">Create Transfer</h1>
+          <p className="text-sm text-[#888888] mt-0.5">Send multiple item lines for receiver confirmation</p>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
-        {/* Route */}
         <Card className="p-5">
-          <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Transfer Route</h2>
+          <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Route</h2>
           <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
             <div>
-              <Label htmlFor="from">From Branch *</Label>
-              <Select id="from" value={fromBranch} onChange={e => setFromBranch(e.target.value)}>
-                <option value="">Select branch…</option>
-                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </Select>
+              <Label>Sender Branch</Label>
+              {profile?.role === 'super_admin' ? (
+                <Select value={senderBranchId} onChange={e => setSenderBranchId(e.target.value)}>
+                  <option value="">Select branch...</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  ))}
+                </Select>
+              ) : (
+                <div className="flex h-9 items-center rounded-md border border-[#DADADA] bg-[#F8F8F8] px-3 text-sm text-[#111111]">
+                  {senderBranch?.name ?? 'No branch assigned'}
+                </div>
+              )}
             </div>
             <div className="mt-5">
               <ArrowRight className="h-4 w-4 text-[#D1D5DB]" />
             </div>
             <div>
-              <Label htmlFor="to">To Branch *</Label>
-              <Select id="to" value={toBranch} onChange={e => setToBranch(e.target.value)}>
-                <option value="">Select branch…</option>
-                {branches.filter(b => b.id !== fromBranch).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              <Label htmlFor="receiver-branch">Receiver Branch *</Label>
+              <Select id="receiver-branch" value={receiverBranchId} onChange={e => setReceiverBranchId(e.target.value)}>
+                <option value="">Select branch...</option>
+                {availableReceivers.map(branch => (
+                  <option key={branch.id} value={branch.id}>{branch.name}</option>
+                ))}
               </Select>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={openAddBranch}
-            className="mt-3 flex items-center gap-1 text-xs text-[#444444] hover:text-[#E8231A] transition-colors"
-          >
-            <Plus className="h-3 w-3" />
-            Add new branch
-          </button>
         </Card>
 
-        {/* Item */}
         <Card className="p-5">
-          <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Item Details</h2>
-          <div className="space-y-4">
-            <div>
-              <Label>Item *</Label>
-              <ItemAutocomplete
-                items={items}
-                selectedItem={selectedItem}
-                onSelect={(item) => setSelectedItem(item)}
-                placeholder="Search items by name…"
-              />
-              <button
-                type="button"
-                onClick={openAddItem}
-                className="mt-2 flex items-center gap-1 text-xs text-[#444444] hover:text-[#E8231A] transition-colors"
-              >
-                <Plus className="h-3 w-3" />
-                Add new item
-              </button>
-            </div>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider">Items</h2>
+            <Button type="button" variant="outline" size="sm" onClick={() => setLines(current => [...current, emptyLine()])}>
+              <Plus className="h-3.5 w-3.5" />
+              Add Line
+            </Button>
+          </div>
 
-            {selectedItem && (
-              <div className="flex gap-4 rounded-md bg-white border border-[#E5E5E5] px-4 py-3">
-                <div>
-                  <p className="text-xs text-[#444444] mb-0.5">Unit</p>
-                  <p className="text-sm text-[#111111] font-medium">{selectedItem.unit}</p>
-                </div>
-                <div className="w-px bg-[#E5E5E5]" />
-                <div>
-                  <p className="text-xs text-[#444444] mb-0.5">Price / unit</p>
-                  <p className="text-sm text-[#111111] font-mono">{formatCurrency(Number(selectedItem.price_per_unit))}</p>
-                </div>
-                {qty > 0 && (
-                  <>
-                    <div className="w-px bg-[#E5E5E5]" />
-                    <div>
-                      <p className="text-xs text-[#444444] mb-0.5">Total value</p>
-                      <p className="text-sm text-[#E8231A] font-mono font-medium">{formatCurrency(subtotal)}</p>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
+          <div className="space-y-3">
+            {lines.map((line, index) => {
+              const item = items.find(candidate => candidate.id === line.itemId)
+              const quantity = Number(line.quantity)
+              const value = item && Number.isFinite(quantity) ? quantity * Number(item.price_per_unit) : 0
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="qty">Quantity *</Label>
-                <Input
-                  id="qty"
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={quantity}
-                  onChange={e => setQuantity(e.target.value)}
-                  placeholder="0"
-                />
-              </div>
-              <div>
-                <Label htmlFor="date">Date *</Label>
-                <Input
-                  id="date"
-                  type="date"
-                  value={date}
-                  onChange={e => setDate(e.target.value)}
-                />
-              </div>
-            </div>
+              return (
+                <div key={index} className="grid grid-cols-[1fr,120px,90px,auto] gap-2 items-end">
+                  <div>
+                    <Label htmlFor={`item-${index}`}>Item *</Label>
+                    <Select id={`item-${index}`} value={line.itemId} onChange={e => updateLine(index, { itemId: e.target.value })}>
+                      <option value="">Select item...</option>
+                      {items.map(candidate => (
+                        <option key={candidate.id} value={candidate.id}>
+                          {candidate.name} ({candidate.unit})
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div>
+                    <Label htmlFor={`quantity-${index}`}>Quantity *</Label>
+                    <Input
+                      id={`quantity-${index}`}
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={line.quantity}
+                      onChange={e => updateLine(index, { quantity: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <p className="mb-2 text-xs text-[#444444]">Value</p>
+                    <p className="h-9 rounded-md border border-[#E5E5E5] px-2 py-2 text-right text-xs font-mono text-[#111111]">
+                      {formatCurrency(value)}
+                    </p>
+                  </div>
+                  <Button type="button" variant="ghost" size="icon" onClick={() => removeLine(index)} disabled={lines.length === 1}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+
+          <div className="mt-4 border-t border-[#F0F0F0] pt-3 text-right text-sm">
+            <span className="text-[#888888]">Total value: </span>
+            <span className="font-mono font-semibold text-[#E8231A]">{formatCurrency(totals)}</span>
           </div>
         </Card>
 
-        {/* Notes */}
-        <div>
-          <Label htmlFor="notes">Notes</Label>
-          <Textarea
-            id="notes"
-            value={notes}
-            onChange={e => setNotes(e.target.value)}
-            placeholder="Optional - reason for transfer, urgency, etc."
-          />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="sent-at">Sent Date *</Label>
+            <Input id="sent-at" type="date" value={sentAt} onChange={e => setSentAt(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="notes">Notes</Label>
+            <Textarea
+              id="notes"
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Optional context for the receiving branch"
+              className="min-h-9"
+            />
+          </div>
         </div>
 
         <div className="flex gap-3 justify-end">
@@ -275,80 +285,10 @@ export default function NewTransferPage() {
             <Button type="button" variant="ghost">Cancel</Button>
           </Link>
           <Button type="submit" loading={saving} size="lg">
-            Log Transfer
+            Create Transfer
           </Button>
         </div>
       </form>
-
-      {/* Add Branch Modal */}
-      <Dialog open={branchOpen} onClose={() => setBranchOpen(false)} title="Add New Branch">
-        <div className="space-y-4">
-          <div>
-            <Label htmlFor="nb-name">Branch Name *</Label>
-            <Input
-              id="nb-name"
-              value={newBranchName}
-              onChange={e => setNewBranchName(e.target.value)}
-              placeholder="e.g. Beirut - Hamra"
-              autoFocus
-            />
-          </div>
-          <div>
-            <Label htmlFor="nb-location">Location</Label>
-            <Input
-              id="nb-location"
-              value={newBranchLocation}
-              onChange={e => setNewBranchLocation(e.target.value)}
-              placeholder="e.g. Beirut, Lebanon"
-            />
-          </div>
-          <div className="flex gap-2 justify-end pt-1">
-            <Button variant="ghost" onClick={() => setBranchOpen(false)}>Cancel</Button>
-            <Button onClick={saveNewBranch} loading={savingBranch}>Add Branch</Button>
-          </div>
-        </div>
-      </Dialog>
-
-      {/* Add Item Modal */}
-      <Dialog open={itemOpen} onClose={() => setItemOpen(false)} title="Add New Item">
-        <div className="space-y-4">
-          <div>
-            <Label htmlFor="ni-name">Item Name *</Label>
-            <Input
-              id="ni-name"
-              value={newItemName}
-              onChange={e => setNewItemName(e.target.value)}
-              placeholder="e.g. Pita Bread"
-              autoFocus
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="ni-unit">Unit *</Label>
-              <Select id="ni-unit" value={newItemUnit} onChange={e => setNewItemUnit(e.target.value)}>
-                <option value="">Select unit…</option>
-                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="ni-price">Price / Unit (USD) *</Label>
-              <Input
-                id="ni-price"
-                type="number"
-                min="0"
-                step="0.01"
-                value={newItemPrice}
-                onChange={e => setNewItemPrice(e.target.value)}
-                placeholder="0.00"
-              />
-            </div>
-          </div>
-          <div className="flex gap-2 justify-end pt-1">
-            <Button variant="ghost" onClick={() => setItemOpen(false)}>Cancel</Button>
-            <Button onClick={saveNewItem} loading={savingItem}>Add Item</Button>
-          </div>
-        </div>
-      </Dialog>
     </div>
   )
 }

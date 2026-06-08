@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import { Branch, TransferRow } from '@/types'
+import { Branch } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,9 +11,9 @@ import { Dialog } from '@/components/ui/dialog'
 import { Plus, Pencil, Trash2, Building2 } from 'lucide-react'
 
 type BranchWithStats = Branch & {
-  totalBorrowed: number
-  totalReturned: number
-  outstanding: number
+  outgoingValue: number
+  incomingValue: number
+  discrepancyValue: number
 }
 
 export default function BranchesPage() {
@@ -29,17 +29,28 @@ export default function BranchesPage() {
   async function load() {
     const [{ data: branchData }, { data: transfers }] = await Promise.all([
       supabase.from('branches').select('*').order('name'),
-      supabase.from('transfers').select('to_branch_id, quantity, quantity_returned, item:items(price_per_unit)'),
+      supabase.from('transfers').select('sender_branch_id, receiver_branch_id, status, transfer_lines(quantity_sent, quantity_received, unit_price_snapshot)'),
     ])
 
     const branchList = branchData || []
     const transferList = transfers || []
 
     const withStats: BranchWithStats[] = branchList.map(b => {
-      const mine = transferList.filter(t => t.to_branch_id === b.id)
-      const totalBorrowed = mine.reduce((s, t) => s + Number(t.quantity) * Number((t.item as { price_per_unit?: number } | null)?.price_per_unit ?? 0), 0)
-      const totalReturned = mine.reduce((s, t) => s + Number(t.quantity_returned) * Number((t.item as { price_per_unit?: number } | null)?.price_per_unit ?? 0), 0)
-      return { ...b, totalBorrowed, totalReturned, outstanding: totalBorrowed - totalReturned }
+      const outgoing = transferList.filter(t => t.sender_branch_id === b.id)
+      const incoming = transferList.filter(t => t.receiver_branch_id === b.id)
+      const outgoingValue = outgoing.reduce((sum, transfer) => {
+        const lines = (transfer.transfer_lines ?? []) as { quantity_sent: number; unit_price_snapshot: number }[]
+        return sum + lines.reduce((lineSum, line) => lineSum + Number(line.quantity_sent) * Number(line.unit_price_snapshot), 0)
+      }, 0)
+      const incomingValue = incoming.reduce((sum, transfer) => {
+        const lines = (transfer.transfer_lines ?? []) as { quantity_received: number | null; unit_price_snapshot: number }[]
+        return sum + lines.reduce((lineSum, line) => lineSum + Number(line.quantity_received ?? 0) * Number(line.unit_price_snapshot), 0)
+      }, 0)
+      const discrepancyValue = incoming.reduce((sum, transfer) => {
+        const lines = (transfer.transfer_lines ?? []) as { quantity_sent: number; quantity_received: number | null; unit_price_snapshot: number }[]
+        return sum + lines.reduce((lineSum, line) => lineSum + Math.abs((Number(line.quantity_sent) - Number(line.quantity_received ?? 0)) * Number(line.unit_price_snapshot)), 0)
+      }, 0)
+      return { ...b, outgoingValue, incomingValue, discrepancyValue }
     })
 
     setBranches(withStats)
@@ -123,17 +134,17 @@ export default function BranchesPage() {
               </div>
               <div className="grid grid-cols-3 gap-2 pt-3 border-t border-[#F0F0F0]">
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Borrowed</p>
-                  <p className="text-xs font-mono font-medium text-[#111111]">{formatCurrency(b.totalBorrowed)}</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Outgoing</p>
+                  <p className="text-xs font-mono font-medium text-[#111111]">{formatCurrency(b.outgoingValue)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Returned</p>
-                  <p className="text-xs font-mono font-medium text-green-500">{formatCurrency(b.totalReturned)}</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Incoming</p>
+                  <p className="text-xs font-mono font-medium text-green-500">{formatCurrency(b.incomingValue)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Outstanding</p>
-                  <p className={`text-xs font-mono font-semibold ${b.outstanding > 0 ? 'text-amber-500' : 'text-[#9CA3AF]'}`}>
-                    {formatCurrency(b.outstanding)}
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Discrepancy</p>
+                  <p className={`text-xs font-mono font-semibold ${b.discrepancyValue > 0 ? 'text-red-500' : 'text-[#9CA3AF]'}`}>
+                    {formatCurrency(b.discrepancyValue)}
                   </p>
                 </div>
               </div>

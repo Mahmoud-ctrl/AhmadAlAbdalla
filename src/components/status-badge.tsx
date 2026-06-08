@@ -1,26 +1,42 @@
 import { Badge } from '@/components/ui/badge'
-import { computeStatus } from '@/lib/utils'
+import type { TransferStatus } from '@/types'
 
 interface StatusBadgeProps {
-  quantity: number
-  quantityReturned: number
+  status: TransferStatus
 }
 
-export function StatusBadge({ quantity, quantityReturned }: StatusBadgeProps) {
-  const status = computeStatus(quantity, quantityReturned)
+const statusLabels: Record<TransferStatus, string> = {
+  pending_receipt: 'Pending Receipt',
+  confirmed: 'Confirmed',
+  needs_admin_review: 'Needs Review',
+  admin_resolved: 'Admin Resolved',
+  cancelled: 'Cancelled',
+}
+
+export function StatusBadge({ status }: StatusBadgeProps) {
   const dot = (
     <span
       className={
-        status === 'returned' ? 'h-1.5 w-1.5 rounded-full bg-green-400' :
-        status === 'partial'  ? 'h-1.5 w-1.5 rounded-full bg-blue-400' :
-                                'h-1.5 w-1.5 rounded-full bg-amber-400'
+        status === 'confirmed' ? 'h-1.5 w-1.5 rounded-full bg-green-400' :
+        status === 'admin_resolved' ? 'h-1.5 w-1.5 rounded-full bg-blue-400' :
+        status === 'cancelled' ? 'h-1.5 w-1.5 rounded-full bg-[#9CA3AF]' :
+        status === 'needs_admin_review' ? 'h-1.5 w-1.5 rounded-full bg-red-400' :
+        'h-1.5 w-1.5 rounded-full bg-amber-400'
       }
     />
   )
+
+  const variant =
+    status === 'confirmed' ? 'success' :
+    status === 'admin_resolved' ? 'info' :
+    status === 'needs_admin_review' ? 'destructive' :
+    status === 'cancelled' ? 'muted' :
+    'warning'
+
   return (
-    <Badge variant={status === 'returned' ? 'success' : status === 'partial' ? 'info' : 'warning'}>
+    <Badge variant={variant}>
       {dot}
-      {status === 'returned' ? 'Returned' : status === 'partial' ? 'Partial' : 'Outstanding'}
+      {statusLabels[status]}
     </Badge>
   )
 }
