@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 type BranchStat = Branch & {
   incomingReceivedQty: number
@@ -255,6 +256,10 @@ export default function ReportPage() {
   const routeItemGroups = useMemo<RouteItemGroup[]>(() => {
     return buildRouteItemGroups(branches, filteredTransfers)
   }, [branches, filteredTransfers])
+
+  const routeItemRows = useMemo(() => {
+    return routeItemGroups.flatMap(group => group.rows)
+  }, [routeItemGroups])
 
   const summary = useMemo(() => {
     const sent = filteredTransfers.reduce((sum, transfer) => sum + sentQuantity(transfer), 0)
@@ -583,16 +588,46 @@ export default function ReportPage() {
           <div>
             <SectionHeading
               title="Items From / To Branches"
-              description="Total item quantities sent from each branch to each destination in the selected report filters."
+              description="One unified view of every item sent from each branch to each destination in the selected report filters."
             />
-            {routeItemGroups.length === 0 ? (
+            {routeItemRows.length === 0 ? (
               <Card className="px-6 py-8 text-center text-sm text-[#444444]">No item movement matches the selected filters.</Card>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {routeItemGroups.map(group => (
-                  <RouteItemGroupCard key={group.branchName} group={group} />
-                ))}
-              </div>
+              <Card className="overflow-hidden bg-white shadow-sm">
+                <div className="border-b border-[#F0F0F0] bg-[#FAFAFA] px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#888888]">
+                    {formatQty(routeItemRows.length)} item route{routeItemRows.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-[#111111] hover:bg-[#111111]">
+                      <TableHead className="text-white">From Branch</TableHead>
+                      <TableHead className="text-white">To Branch</TableHead>
+                      <TableHead className="text-white">Item</TableHead>
+                      <TableHead className="text-white">Unit</TableHead>
+                      <TableHead className="text-right text-white">Qty Sent</TableHead>
+                      <TableHead className="text-right text-white">Lines</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {routeItemRows.map(row => (
+                      <TableRow key={row.id}>
+                        <TableCell className="font-medium" dir="auto">{row.senderBranchName}</TableCell>
+                        <TableCell dir="auto">{row.receiverBranchName}</TableCell>
+                        <TableCell dir="auto">{row.itemName}</TableCell>
+                        <TableCell className="text-[#888888]">{row.unit || '-'}</TableCell>
+                        <TableCell className="text-right font-mono text-xs font-semibold tabular text-[#E8231A]">
+                          {formatQty(row.quantitySent)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs tabular text-[#444444]">
+                          {formatQty(row.transferCount)}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </Card>
             )}
           </div>
         </div>
@@ -727,47 +762,6 @@ function BranchReportCard({ branch }: { branch: BranchStat }) {
         <QuantityMetric label="Out" value={branch.outgoingSentQty} />
         <QuantityMetric label="Pending In" value={branch.pendingIncomingQty} color="amber" />
       </div>
-      </div>
-    </Card>
-  )
-}
-
-function RouteItemGroupCard({ group }: { group: RouteItemGroup }) {
-  const receiverGroups = groupRouteRowsByReceiver(group.rows)
-  const totalQty = group.rows.reduce((sum, row) => sum + row.quantitySent, 0)
-
-  return (
-    <Card className="overflow-hidden bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#F3B4AF] hover:shadow-md">
-      <div className="flex items-start justify-between gap-4 bg-[#111111] px-4 py-3 text-white">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold">{group.branchName}</h3>
-          <p className="mt-0.5 text-xs text-[#D1D5DB]">
-            {formatQty(group.rows.length)} item route{group.rows.length === 1 ? '' : 's'}
-          </p>
-        </div>
-        <p className="shrink-0 font-mono text-lg font-bold tabular">{formatQty(totalQty)}</p>
-      </div>
-
-      <div className="space-y-4 p-4">
-        {receiverGroups.map(receiverGroup => (
-          <div key={receiverGroup.receiverBranchName}>
-            <div className="mb-2 flex items-center gap-2">
-              <span className="rounded-md bg-[#FFF1F0] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#E8231A]">To</span>
-              <p className="truncate text-xs font-semibold text-[#111111]">{receiverGroup.receiverBranchName}</p>
-            </div>
-            <div className="space-y-2">
-              {receiverGroup.rows.map(row => (
-                <div key={row.id} className="rounded-lg border border-[#F0F0F0] bg-[#FAFAFA] p-3 transition-colors hover:bg-white">
-                  <p className="text-sm font-medium text-[#111111]">
-                    <span className="font-mono text-lg font-bold tabular text-[#E8231A]">{formatQty(row.quantitySent)}</span>
-                    {row.unit && <span className="ml-1 text-xs text-[#6B7280]">{row.unit}</span>}
-                  </p>
-                  <p className="mt-0.5 text-xs text-[#444444]">{row.itemName}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
       </div>
     </Card>
   )
