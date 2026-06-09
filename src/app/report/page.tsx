@@ -1,31 +1,42 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { AlertCircle, CheckCircle, Clock, Download, Filter, Printer, TrendingUp } from 'lucide-react'
+import { CheckCircle, Clock, Download, Filter, Printer, TrendingUp } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { fetchBranches, fetchItems } from '@/lib/data-cache'
-import type { Branch, Item, TransferRow, TransferStatus } from '@/types'
+import { fetchBranches } from '@/lib/data-cache'
+import type { Branch, TransferRow, TransferStatus } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 type BranchStat = Branch & {
   incomingReceivedQty: number
   outgoingSentQty: number
+  totalMovementQty: number
   pendingIncomingQty: number
-  discrepancyQty: number
   transferCount: number
 }
 
-type ItemStat = Item & {
+type RouteItemStat = {
+  id: string
+  senderBranchName: string
+  receiverBranchName: string
+  itemName: string
+  unit: string
   quantitySent: number
-  quantityReceived: number
-  pendingQuantity: number
-  discrepancyQuantity: number
+  transferCount: number
+}
+
+type RouteItemGroup = {
+  branchName: string
+  rows: RouteItemStat[]
+}
+
+type ReceiverRouteGroup = {
+  receiverBranchName: string
+  rows: RouteItemStat[]
 }
 
 type DatePreset = 'all' | 'today' | 'week' | 'month' | 'last_month' | 'custom'
@@ -49,13 +60,6 @@ function receivedQuantity(transfer: TransferRow) {
 
 function pendingQuantity(transfer: TransferRow) {
   return transfer.status === 'pending_receipt' ? sentQuantity(transfer) : 0
-}
-
-function discrepancyQuantity(transfer: TransferRow) {
-  return transfer.transfer_lines.reduce(
-    (sum, line) => sum + Math.abs(Number(line.quantity_sent) - Number(line.quantity_received ?? 0)),
-    0
-  )
 }
 
 function formatQty(value: number) {
@@ -92,13 +96,85 @@ function presetRange(preset: DatePreset) {
   return { from: '', to: '' }
 }
 
+function currentMonthRange() {
+  const now = new Date()
+  const from = new Date(now.getFullYear(), now.getMonth(), 1)
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+
+  return { from: dateInputValue(from), to: dateInputValue(to) }
+}
+
+function isTransferInDateRange(transfer: TransferRow, from: string, to: string) {
+  const sentDate = dateInputValue(transfer.sent_at)
+
+  if (from && sentDate < from) return false
+  if (to && sentDate > to) return false
+
+  return true
+}
+
 function csvEscape(value: string | number) {
   return `"${String(value).replaceAll('"', '""')}"`
 }
 
+function htmlEscape(value: string | number) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+async function imageToDataUrl(path: string) {
+  try {
+    const response = await fetch(path)
+    const blob = await response.blob()
+
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return ''
+  }
+}
+
+const csvHeaders = [
+  'Section',
+  'Name',
+  'Unit',
+  'From Branch',
+  'To Branch',
+  'Transfers',
+  'Total Movement Qty',
+  'Outgoing Sent Qty',
+  'Incoming Received Qty',
+  'Pending Incoming Qty',
+  'Qty Sent',
+] as const
+
+type CsvHeader = typeof csvHeaders[number]
+type CsvRow = Partial<Record<CsvHeader, string | number>>
+
+function csvRow(values: CsvRow) {
+  return csvHeaders.map(header => values[header] ?? '')
+}
+
 export default function ReportPage() {
   const [branches, setBranches] = useState<Branch[]>([])
-  const [items, setItems] = useState<Item[]>([])
   const [transfers, setTransfers] = useState<TransferRow[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -110,9 +186,8 @@ export default function ReportPage() {
 
   useEffect(() => {
     async function load() {
-      const [branchData, itemData, { data: transferData }] = await Promise.all([
+      const [branchData, { data: transferData }] = await Promise.all([
         fetchBranches(),
-        fetchItems(),
         supabase
           .from('transfers')
           .select('id, status, sent_at, sender_branch_id, receiver_branch_id, transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit))')
@@ -120,7 +195,6 @@ export default function ReportPage() {
       ])
 
       setBranches(branchData)
-      setItems(itemData)
       setTransfers((transferData as unknown as TransferRow[]) ?? [])
       setLoading(false)
     }
@@ -151,68 +225,44 @@ export default function ReportPage() {
   }, [branchFilter, dateFrom, dateTo, statusFilter, transfers])
 
   const branchStats = useMemo<BranchStat[]>(() => {
-    return branches.map(branch => {
-      const incoming = filteredTransfers.filter(transfer => transfer.receiver_branch_id === branch.id)
-      const outgoing = filteredTransfers.filter(transfer => transfer.sender_branch_id === branch.id)
-
-      return {
-        ...branch,
-        incomingReceivedQty: incoming.reduce((sum, transfer) => sum + receivedQuantity(transfer), 0),
-        outgoingSentQty: outgoing.reduce((sum, transfer) => sum + sentQuantity(transfer), 0),
-        pendingIncomingQty: incoming.reduce((sum, transfer) => sum + pendingQuantity(transfer), 0),
-        discrepancyQty: incoming.reduce((sum, transfer) => sum + discrepancyQuantity(transfer), 0),
-        transferCount: incoming.length + outgoing.length,
-      }
-    }).filter(branch => branch.transferCount > 0).sort((a, b) => b.discrepancyQty - a.discrepancyQty)
+    return buildBranchStats(branches, filteredTransfers)
   }, [branches, filteredTransfers])
 
-  const itemStats = useMemo<ItemStat[]>(() => {
-    return items.map(item => {
-      const lines = filteredTransfers.flatMap(transfer => transfer.transfer_lines.filter(line => line.item_id === item.id))
-      const pendingLines = filteredTransfers
-        .filter(transfer => transfer.status === 'pending_receipt')
-        .flatMap(transfer => transfer.transfer_lines.filter(line => line.item_id === item.id))
-      const quantitySent = lines.reduce((sum, line) => sum + Number(line.quantity_sent), 0)
-      const quantityReceived = lines.reduce((sum, line) => sum + Number(line.quantity_received ?? 0), 0)
-      const pendingQuantity = pendingLines.reduce((sum, line) => sum + Number(line.quantity_sent), 0)
+  const monthlyTransfers = useMemo(() => {
+    const { from, to } = currentMonthRange()
+    return transfers.filter(transfer => isTransferInDateRange(transfer, from, to))
+  }, [transfers])
 
-      return {
-        ...item,
-        quantitySent,
-        quantityReceived,
-        pendingQuantity,
-        discrepancyQuantity: Math.abs(quantitySent - quantityReceived),
-      }
-    }).filter(item => item.quantitySent > 0).sort((a, b) => b.discrepancyQuantity - a.discrepancyQuantity)
-  }, [filteredTransfers, items])
+  const monthlyBranchStats = useMemo<BranchStat[]>(() => {
+    return buildBranchStats(branches, monthlyTransfers)
+  }, [branches, monthlyTransfers])
+
+  const monthlySummary = useMemo(() => {
+    const sent = monthlyTransfers.reduce((sum, transfer) => sum + sentQuantity(transfer), 0)
+    const received = monthlyTransfers.reduce((sum, transfer) => sum + receivedQuantity(transfer), 0)
+    const pending = monthlyTransfers.reduce((sum, transfer) => sum + pendingQuantity(transfer), 0)
+    const totalMovement = monthlyBranchStats.reduce((sum, branch) => sum + branch.totalMovementQty, 0)
+
+    return {
+      sent,
+      received,
+      pending,
+      totalMovement,
+      transferCount: monthlyTransfers.length,
+    }
+  }, [monthlyBranchStats, monthlyTransfers])
+
+  const routeItemGroups = useMemo<RouteItemGroup[]>(() => {
+    return buildRouteItemGroups(branches, filteredTransfers)
+  }, [branches, filteredTransfers])
 
   const summary = useMemo(() => {
     const sent = filteredTransfers.reduce((sum, transfer) => sum + sentQuantity(transfer), 0)
     const received = filteredTransfers.reduce((sum, transfer) => sum + receivedQuantity(transfer), 0)
     const pending = filteredTransfers.reduce((sum, transfer) => sum + pendingQuantity(transfer), 0)
-    const discrepancy = filteredTransfers.reduce((sum, transfer) => sum + discrepancyQuantity(transfer), 0)
-    const reviewCount = filteredTransfers.filter(transfer => transfer.status === 'needs_admin_review').length
-    const pendingCount = filteredTransfers.filter(transfer => transfer.status === 'pending_receipt').length
-    const discrepancyRate = sent > 0 ? (discrepancy / sent) * 100 : 0
 
-    return { sent, received, pending, discrepancy, reviewCount, pendingCount, discrepancyRate }
+    return { sent, received, pending }
   }, [filteredTransfers])
-
-  const needsAttention = useMemo(() => {
-    return {
-      pending: filteredTransfers.filter(transfer => transfer.status === 'pending_receipt').slice(0, 5),
-      discrepancies: filteredTransfers
-        .map(transfer => ({ transfer, value: discrepancyQuantity(transfer) }))
-        .filter(entry => entry.value > 0)
-        .sort((a, b) => b.value - a.value)
-        .slice(0, 5),
-    }
-  }, [filteredTransfers])
-
-  const chartData = branchStats.slice(0, 10).map(branch => ({
-    name: branch.name.length > 14 ? `${branch.name.slice(0, 13)}...` : branch.name,
-    discrepancy: parseFloat(branch.discrepancyQty.toFixed(2)),
-  }))
 
   function clearFilters() {
     setDatePreset('all')
@@ -224,57 +274,203 @@ export default function ReportPage() {
 
   function exportCsv() {
     const rows = [
-      ['Type', 'Name', 'Unit', 'Transfers', 'Outgoing Sent Qty', 'Incoming Received Qty', 'Pending Incoming Qty', 'Qty Sent', 'Qty Received', 'Pending Qty', 'Qty Difference'],
-      ...branchStats.map(branch => [
-        'Branch',
-        branch.name,
-        'mixed',
-        branch.transferCount,
-        branch.outgoingSentQty.toFixed(2),
-        branch.incomingReceivedQty.toFixed(2),
-        branch.pendingIncomingQty.toFixed(2),
-        '',
-        '',
-        '',
-        branch.discrepancyQty.toFixed(2),
-      ]),
-      ...itemStats.map(item => [
-        'Item',
-        item.name,
-        item.unit,
-        '',
-        '',
-        '',
-        '',
-        item.quantitySent.toFixed(2),
-        item.quantityReceived.toFixed(2),
-        item.pendingQuantity.toFixed(2),
-        item.discrepancyQuantity.toFixed(2),
+      csvHeaders,
+      ...branchStats.map(branch => csvRow({
+        Section: 'Branch Summary',
+        Name: branch.name,
+        Unit: 'mixed',
+        Transfers: branch.transferCount,
+        'Total Movement Qty': branch.totalMovementQty.toFixed(2),
+        'Outgoing Sent Qty': branch.outgoingSentQty.toFixed(2),
+        'Incoming Received Qty': branch.incomingReceivedQty.toFixed(2),
+        'Pending Incoming Qty': branch.pendingIncomingQty.toFixed(2),
+      })),
+      ...routeItemGroups.flatMap(group => [
+        csvRow({
+          Section: 'From Branch',
+          Name: group.branchName,
+          'From Branch': group.branchName,
+        }),
+        ...groupRouteRowsByReceiver(group.rows).flatMap(receiverGroup => [
+          csvRow({
+            Section: 'To Branch',
+            Name: receiverGroup.receiverBranchName,
+            'From Branch': group.branchName,
+            'To Branch': receiverGroup.receiverBranchName,
+          }),
+          ...receiverGroup.rows.map(row => csvRow({
+            Section: 'Route Item',
+            Name: row.itemName,
+            Unit: row.unit,
+            'From Branch': row.senderBranchName,
+            'To Branch': row.receiverBranchName,
+            Transfers: row.transferCount,
+            'Qty Sent': row.quantitySent.toFixed(2),
+          })),
+        ]),
       ]),
     ]
 
-    const csv = rows.map(row => row.map(value => csvEscape(value)).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
+    const csv = `\uFEFF${rows.map(row => row.map(value => csvEscape(value)).join(',')).join('\n')}`
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `quantity-report-${dateInputValue(new Date())}.csv`)
+  }
 
-    link.href = url
-    link.download = `quantity-report-${dateInputValue(new Date())}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+  async function exportDesignedReport() {
+    const logoDataUrl = await imageToDataUrl('/logo.png')
+    const generatedAt = new Intl.DateTimeFormat('en-US', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(new Date())
+    const filterLabel = dateFrom || dateTo ? `${dateFrom || 'Start'} to ${dateTo || 'Today'}` : 'All time'
+    const branchRowsHtml = branchStats.map(branch => `
+      <tr>
+        <td dir="auto">${htmlEscape(branch.name)}</td>
+        <td>${htmlEscape(branch.transferCount)}</td>
+        <td>${htmlEscape(formatQty(branch.totalMovementQty))}</td>
+        <td>${htmlEscape(formatQty(branch.outgoingSentQty))}</td>
+        <td>${htmlEscape(formatQty(branch.incomingReceivedQty))}</td>
+        <td>${htmlEscape(formatQty(branch.pendingIncomingQty))}</td>
+      </tr>
+    `).join('')
+
+    const routeGroupsHtml = routeItemGroups.map(group => {
+      const receiverGroups = groupRouteRowsByReceiver(group.rows)
+      const totalQty = group.rows.reduce((sum, row) => sum + row.quantitySent, 0)
+
+      return `
+        <div class="route-card">
+          <div class="route-card-head">
+            <div>
+              <h3 dir="auto">${htmlEscape(group.branchName)}</h3>
+              <p>${htmlEscape(formatQty(group.rows.length))} item routes</p>
+            </div>
+            <strong>${htmlEscape(formatQty(totalQty))}</strong>
+          </div>
+          ${receiverGroups.map(receiverGroup => `
+            <div class="receiver-block">
+              <div class="receiver-title">To <span dir="auto">${htmlEscape(receiverGroup.receiverBranchName)}</span></div>
+              <table class="route">
+                <thead><tr><th>Item</th><th>Unit</th><th>Qty Sent</th><th>Lines</th></tr></thead>
+                <tbody>
+                  ${receiverGroup.rows.map(row => `
+                    <tr>
+                      <td dir="auto">${htmlEscape(row.itemName)}</td>
+                      <td>${htmlEscape(row.unit || '-')}</td>
+                      <td>${htmlEscape(formatQty(row.quantitySent))}</td>
+                      <td>${htmlEscape(row.transferCount)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `).join('')}
+        </div>
+      `
+    }).join('')
+
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Quantity Report</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f4f4f5; color: #111111; font-family: Arial, Helvetica, sans-serif; }
+    .page { max-width: 1180px; margin: 0 auto; padding: 28px; }
+    .hero { background: #ffffff; border: 1px solid #e5e5e5; border-radius: 14px; overflow: hidden; box-shadow: 0 18px 45px rgba(17,17,17,0.08); }
+    .topbar { height: 8px; background: #e8231a; }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 28px; border-bottom: 1px solid #eeeeee; }
+    .brand { display: flex; align-items: center; gap: 18px; min-width: 0; }
+    .logo { max-width: 170px; max-height: 64px; object-fit: contain; }
+    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
+    .subtitle { margin: 6px 0 0; color: #6b7280; font-size: 13px; }
+    .meta { text-align: right; color: #6b7280; font-size: 12px; line-height: 1.7; white-space: nowrap; }
+    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 20px 28px; background: #fafafa; }
+    .metric { background: #ffffff; border: 1px solid #eeeeee; border-radius: 10px; padding: 14px; }
+    .metric span { display: block; color: #8a8a8a; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .metric strong { display: block; margin-top: 7px; font-size: 22px; font-family: Consolas, 'Courier New', monospace; }
+    .section { padding: 22px 28px 6px; }
+    h2 { margin: 0 0 10px; font-size: 15px; }
+    table { width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #eeeeee; border-radius: 10px; overflow: hidden; }
+    th { background: #111111; color: #ffffff; text-align: left; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; padding: 10px 12px; }
+    td { border-top: 1px solid #eeeeee; padding: 10px 12px; font-size: 12px; vertical-align: top; }
+    tr:nth-child(even) td { background: #fbfbfb; }
+    td:not(:first-child), th:not(:first-child) { text-align: right; }
+    .route-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .route-card { border: 1px solid #eeeeee; border-radius: 12px; overflow: hidden; background: #ffffff; page-break-inside: avoid; }
+    .route-card-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; background: #111111; color: #ffffff; padding: 14px 16px; }
+    .route-card-head h3 { margin: 0; font-size: 15px; }
+    .route-card-head p { margin: 4px 0 0; color: #d1d5db; font-size: 11px; }
+    .route-card-head strong { color: #ffffff; font-family: Consolas, 'Courier New', monospace; font-size: 18px; }
+    .receiver-block { padding: 12px 14px 14px; border-top: 1px solid #eeeeee; }
+    .receiver-title { margin-bottom: 8px; color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .receiver-title span { color: #e8231a; }
+    .route th { background: #f4f4f5; color: #444444; }
+    .route td:first-child, .route th:first-child { text-align: left; }
+    .footer { padding: 18px 28px 26px; color: #8a8a8a; font-size: 11px; }
+    @media print { body { background: #ffffff; } .page { padding: 0; } .hero { box-shadow: none; border-radius: 0; } }
+    @media (max-width: 800px) { .header, .summary, .route-grid { grid-template-columns: 1fr; display: block; } .metric, .route-card { margin-top: 10px; } .meta { text-align: left; margin-top: 14px; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="hero">
+      <div class="topbar"></div>
+      <div class="header">
+        <div class="brand">
+          ${logoDataUrl ? `<img class="logo" src="${logoDataUrl}" alt="Ahmad Al Abdalla" />` : ''}
+          <div>
+            <h1>Quantity Report</h1>
+            <p class="subtitle">Branch movement, item routes, and monthly quantity totals</p>
+          </div>
+        </div>
+        <div class="meta">
+          <div>Generated: ${htmlEscape(generatedAt)}</div>
+          <div>Range: ${htmlEscape(filterLabel)}</div>
+          <div>Status: ${htmlEscape(statusFilter === 'all' ? 'All statuses' : statusFilter.replaceAll('_', ' '))}</div>
+        </div>
+      </div>
+      <div class="summary">
+        <div class="metric"><span>Total Sent</span><strong>${htmlEscape(formatQty(summary.sent))}</strong></div>
+        <div class="metric"><span>Total Received</span><strong>${htmlEscape(formatQty(summary.received))}</strong></div>
+        <div class="metric"><span>This Month Movement</span><strong>${htmlEscape(formatQty(monthlySummary.totalMovement))}</strong></div>
+        <div class="metric"><span>Pending Qty</span><strong>${htmlEscape(formatQty(summary.pending))}</strong></div>
+      </div>
+      <div class="section">
+        <h2>Branch Summary</h2>
+        <table>
+          <thead><tr><th>Branch</th><th>Transfers</th><th>Total Movement</th><th>Outgoing Sent</th><th>Incoming Received</th><th>Pending Incoming</th></tr></thead>
+          <tbody>${branchRowsHtml || '<tr><td colspan="6">No branch data.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="section">
+        <h2>Items From / To Branches</h2>
+        ${routeGroupsHtml ? `<div class="route-grid">${routeGroupsHtml}</div>` : '<table><tbody><tr><td>No item movement.</td></tr></tbody></table>'}
+      </div>
+      <div class="footer">Ahmad Al Abdalla internal transfer report.</div>
+    </div>
+  </div>
+</body>
+</html>`
+
+    downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8;' }), `quantity-report-${dateInputValue(new Date())}.html`)
   }
 
   return (
-    <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-6xl">
+    <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-7xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold text-[#111111]">Quantity Report</h1>
-          <p className="text-sm text-[#888888] mt-0.5">Branch movement and quantity discrepancy summary</p>
+          <p className="text-sm text-[#888888] mt-0.5">Branch movement and item quantity summary</p>
         </div>
         <div className="flex flex-wrap gap-2 no-print">
           <Button variant="outline" onClick={exportCsv} disabled={loading || filteredTransfers.length === 0}>
             <Download className="h-4 w-4" />
             Export CSV
+          </Button>
+          <Button variant="outline" onClick={exportDesignedReport} disabled={loading || filteredTransfers.length === 0}>
+            <Download className="h-4 w-4" />
+            Export Report
           </Button>
           <Button variant="outline" onClick={() => window.print()}>
             <Printer className="h-4 w-4" />
@@ -341,139 +537,63 @@ export default function ReportPage() {
           </Card>
 
           <div className="space-y-4">
+            <div>
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between mb-3">
+                <div>
+                  <h2 className="text-sm font-medium text-[#111111]">This Month</h2>
+                  <p className="text-xs text-[#888888] mt-0.5">
+                    Current calendar month totals, independent from the selected report filters.
+                  </p>
+                </div>
+                <p className="text-xs text-[#888888]">
+                  {formatQty(monthlySummary.transferCount)} transfer{monthlySummary.transferCount === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Total Movement" value={formatQty(monthlySummary.totalMovement)} compact />
+                <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Qty Sent" value={formatQty(monthlySummary.sent)} compact />
+                <SummaryCard icon={<CheckCircle className="h-4 w-4 text-green-400" />} label="Qty Received" value={formatQty(monthlySummary.received)} color="green" compact />
+                <SummaryCard icon={<Clock className="h-4 w-4" />} label="Pending Qty" value={formatQty(monthlySummary.pending)} compact />
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Qty Sent" value={formatQty(summary.sent)} />
               <SummaryCard icon={<CheckCircle className="h-4 w-4 text-green-400" />} label="Qty Received" value={formatQty(summary.received)} color="green" />
-              <SummaryCard icon={<AlertCircle className="h-4 w-4 text-red-500" />} label="Qty Difference" value={formatQty(summary.discrepancy)} color="red" />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               <SummaryCard icon={<Clock className="h-4 w-4" />} label="Pending Qty" value={formatQty(summary.pending)} compact />
-              <SummaryCard icon={<Clock className="h-4 w-4" />} label="Pending Transfers" value={String(summary.pendingCount)} compact />
-              <SummaryCard icon={<AlertCircle className="h-4 w-4 text-red-500" />} label="Needs Review" value={String(summary.reviewCount)} color="red" compact />
-              <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Difference Rate" value={`${summary.discrepancyRate.toFixed(1)}%`} color={summary.discrepancyRate > 0 ? 'red' : undefined} compact />
             </div>
           </div>
 
-          {(needsAttention.pending.length > 0 || needsAttention.discrepancies.length > 0) && (
-            <div>
-              <h2 className="text-sm font-medium text-[#111111] mb-3">Needs Attention</h2>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <AttentionList
-                  title="Oldest Pending Receipts"
-                  empty="No pending receipts in this report."
-                  rows={needsAttention.pending.map(transfer => ({
-                    id: transfer.id,
-                    label: `${branchName(branches, transfer.sender_branch_id)} -> ${branchName(branches, transfer.receiver_branch_id)}`,
-                    meta: dateInputValue(transfer.sent_at),
-                    value: `${formatQty(sentQuantity(transfer))} qty`,
-                  }))}
-                />
-                <AttentionList
-                  title="Largest Quantity Differences"
-                  empty="No quantity differences in this report."
-                  rows={needsAttention.discrepancies.map(({ transfer, value }) => ({
-                    id: transfer.id,
-                    label: `${branchName(branches, transfer.sender_branch_id)} -> ${branchName(branches, transfer.receiver_branch_id)}`,
-                    meta: transfer.status.replaceAll('_', ' '),
-                    value: `${formatQty(value)} qty`,
-                  }))}
-                />
-              </div>
-            </div>
-          )}
-
-          {chartData.length > 0 && (
-            <Card>
-              <div className="px-5 pt-5 pb-2 border-b border-[#E5E5E5]">
-                <h2 className="text-sm font-medium text-[#111111]">Quantity Difference by Receiving Branch</h2>
-              </div>
-              <div className="p-5">
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={chartData} margin={{ top: 0, right: 0, bottom: 0, left: 0 }} barSize={24}>
-                    <XAxis dataKey="name" tick={{ fill: '#9CA3AF', fontSize: 11 }} axisLine={false} tickLine={false} />
-                    <YAxis tickFormatter={value => formatQty(Number(value))} tick={{ fill: '#9CA3AF', fontSize: 11 }} axisLine={false} tickLine={false} width={60} />
-                    <Tooltip
-                      cursor={{ fill: 'rgba(0,0,0,0.03)' }}
-                      contentStyle={{ background: '#ffffff', border: '1px solid #E5E5E5', borderRadius: '8px', fontSize: '12px', color: '#111111' }}
-                      formatter={value => [formatQty(Number(value)), 'Qty Difference']}
-                    />
-                    <Bar dataKey="discrepancy" radius={[4, 4, 0, 0]}>
-                      {chartData.map((entry, index) => (
-                        <Cell key={index} fill={entry.discrepancy > 0 ? '#E8231A' : '#333333'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-          )}
-
           <div>
-            <h2 className="text-sm font-medium text-[#111111] mb-3">Per Branch</h2>
-            <Card>
-              {branchStats.length === 0 ? (
-                <div className="px-6 py-8 text-center text-sm text-[#444444]">No branch data matches the selected filters.</div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Branch</TableHead>
-                      <TableHead className="text-right"># Transfers</TableHead>
-                      <TableHead className="text-right">Outgoing Sent Qty</TableHead>
-                      <TableHead className="text-right">Incoming Received Qty</TableHead>
-                      <TableHead className="text-right">Pending Incoming Qty</TableHead>
-                      <TableHead className="text-right">Qty Difference</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {branchStats.map(branch => (
-                      <TableRow key={branch.id}>
-                        <TableCell className="font-medium">{branch.name}</TableCell>
-                        <TableCell className="text-right text-[#888888] font-mono text-xs tabular">{branch.transferCount}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular">{formatQty(branch.outgoingSentQty)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular text-green-400">{formatQty(branch.incomingReceivedQty)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular text-amber-500">{formatQty(branch.pendingIncomingQty)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular text-red-500">{formatQty(branch.discrepancyQty)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </Card>
+            <SectionHeading
+              title="Per Branch"
+              description="A 4-column operational view of incoming, outgoing, pending, and total movement."
+            />
+            {branchStats.length === 0 ? (
+              <Card className="px-6 py-8 text-center text-sm text-[#444444]">No branch data matches the selected filters.</Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                {branchStats.map(branch => (
+                  <BranchReportCard key={branch.id} branch={branch} />
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
-            <h2 className="text-sm font-medium text-[#111111] mb-3">Per Item</h2>
-            <Card>
-              {itemStats.length === 0 ? (
-                <div className="px-6 py-8 text-center text-sm text-[#444444]">No item data matches the selected filters.</div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Item</TableHead>
-                      <TableHead>Unit</TableHead>
-                      <TableHead className="text-right">Qty Sent</TableHead>
-                      <TableHead className="text-right">Qty Received</TableHead>
-                      <TableHead className="text-right">Pending Qty</TableHead>
-                      <TableHead className="text-right">Qty Difference</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {itemStats.map(item => (
-                      <TableRow key={item.id}>
-                        <TableCell className="font-medium">{item.name}</TableCell>
-                        <TableCell className="text-[#888888]">{item.unit}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular">{formatQty(item.quantitySent)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular">{formatQty(item.quantityReceived)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular text-amber-500">{formatQty(item.pendingQuantity)}</TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular text-red-500">{formatQty(item.discrepancyQuantity)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </Card>
+            <SectionHeading
+              title="Items From / To Branches"
+              description="Total item quantities sent from each branch to each destination in the selected report filters."
+            />
+            {routeItemGroups.length === 0 ? (
+              <Card className="px-6 py-8 text-center text-sm text-[#444444]">No item movement matches the selected filters.</Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                {routeItemGroups.map(group => (
+                  <RouteItemGroupCard key={group.branchName} group={group} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -485,34 +605,196 @@ function branchName(branches: Branch[], id: string) {
   return branches.find(branch => branch.id === id)?.name ?? 'Unknown branch'
 }
 
-function AttentionList({
-  title,
-  empty,
-  rows,
-}: {
-  title: string
-  empty: string
-  rows: Array<{ id: string; label: string; meta: string; value: string }>
-}) {
+function buildBranchStats(branches: Branch[], transfers: TransferRow[]): BranchStat[] {
+  return branches.map(branch => {
+    const incoming = transfers.filter(transfer => transfer.receiver_branch_id === branch.id)
+    const outgoing = transfers.filter(transfer => transfer.sender_branch_id === branch.id)
+    const incomingReceivedQty = incoming.reduce((sum, transfer) => sum + receivedQuantity(transfer), 0)
+    const outgoingSentQty = outgoing.reduce((sum, transfer) => sum + sentQuantity(transfer), 0)
+
+    return {
+      ...branch,
+      incomingReceivedQty,
+      outgoingSentQty,
+      totalMovementQty: incomingReceivedQty + outgoingSentQty,
+      pendingIncomingQty: incoming.reduce((sum, transfer) => sum + pendingQuantity(transfer), 0),
+      transferCount: incoming.length + outgoing.length,
+    }
+  }).filter(branch => branch.transferCount > 0).sort((a, b) => b.totalMovementQty - a.totalMovementQty)
+}
+
+function buildRouteItemGroups(branches: Branch[], transfers: TransferRow[]): RouteItemGroup[] {
+  const rowsByKey = new Map<string, RouteItemStat>()
+
+  for (const transfer of transfers) {
+    const senderBranchName = branchName(branches, transfer.sender_branch_id)
+    const receiverBranchName = branchName(branches, transfer.receiver_branch_id)
+
+    for (const line of transfer.transfer_lines) {
+      const itemName = line.item?.name ?? 'Unknown item'
+      const unit = line.item?.unit ?? ''
+      const key = `${transfer.sender_branch_id}:${transfer.receiver_branch_id}:${line.item_id}:${unit}`
+      const existing = rowsByKey.get(key)
+
+      if (existing) {
+        existing.quantitySent += Number(line.quantity_sent)
+        existing.transferCount += 1
+      } else {
+        rowsByKey.set(key, {
+          id: key,
+          senderBranchName,
+          receiverBranchName,
+          itemName,
+          unit,
+          quantitySent: Number(line.quantity_sent),
+          transferCount: 1,
+        })
+      }
+    }
+  }
+
+  const groups = new Map<string, RouteItemStat[]>()
+
+  for (const row of rowsByKey.values()) {
+    const groupRows = groups.get(row.senderBranchName) ?? []
+    groupRows.push(row)
+    groups.set(row.senderBranchName, groupRows)
+  }
+
+  return Array.from(groups.entries())
+    .map(([branchNameValue, rows]) => ({
+      branchName: branchNameValue,
+      rows: rows.sort((a, b) => (
+        a.receiverBranchName.localeCompare(b.receiverBranchName)
+        || a.itemName.localeCompare(b.itemName)
+      )),
+    }))
+    .sort((a, b) => a.branchName.localeCompare(b.branchName))
+}
+
+function groupRouteRowsByReceiver(rows: RouteItemStat[]): ReceiverRouteGroup[] {
+  const groups = new Map<string, RouteItemStat[]>()
+
+  for (const row of rows) {
+    const groupRows = groups.get(row.receiverBranchName) ?? []
+    groupRows.push(row)
+    groups.set(row.receiverBranchName, groupRows)
+  }
+
+  return Array.from(groups.entries())
+    .map(([receiverBranchName, groupRows]) => ({
+      receiverBranchName,
+      rows: groupRows.sort((a, b) => a.itemName.localeCompare(b.itemName)),
+    }))
+    .sort((a, b) => a.receiverBranchName.localeCompare(b.receiverBranchName))
+}
+
+function SectionHeading({ title, description }: { title: string; description?: string }) {
   return (
-    <Card className="p-5 bg-white">
-      <h3 className="text-sm font-medium text-[#111111] mb-4">{title}</h3>
-      {rows.length === 0 ? (
-        <p className="text-sm text-[#888888]">{empty}</p>
-      ) : (
-        <div className="space-y-3">
-          {rows.map(row => (
-            <div key={row.id} className="flex items-center justify-between gap-4 rounded-lg border border-[#F0F0F0] p-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-[#111111]">{row.label}</p>
-                <p className="mt-0.5 text-xs text-[#888888]">{row.meta}</p>
-              </div>
-              <p className="shrink-0 font-mono text-xs font-semibold text-red-500">{row.value}</p>
-            </div>
-          ))}
+    <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h2 className="text-sm font-semibold text-[#111111]">{title}</h2>
+        {description && <p className="mt-0.5 text-xs text-[#888888]">{description}</p>}
+      </div>
+    </div>
+  )
+}
+
+function BranchReportCard({ branch }: { branch: BranchStat }) {
+  return (
+    <Card className="group overflow-hidden bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#F3B4AF] hover:shadow-md">
+      <div className="h-1 bg-[#E8231A]" />
+      <div className="p-4">
+      <div className="flex items-start justify-between gap-3 border-b border-[#F0F0F0] pb-3">
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-semibold text-[#111111]">{branch.name}</h3>
+          <p className="mt-0.5 text-xs text-[#888888]">
+            {formatQty(branch.transferCount)} transfer{branch.transferCount === 1 ? '' : 's'}
+          </p>
         </div>
-      )}
+        <div className="rounded-md bg-[#FFF1F0] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#E8231A]">
+          Branch
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-lg bg-[#FAFAFA] p-3">
+        <p className="text-[10px] uppercase tracking-wider text-[#9CA3AF]">Total Quantity</p>
+        <p className="mt-1 font-mono text-3xl font-bold tabular text-[#111111]">{formatQty(branch.totalMovementQty)}</p>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <QuantityMetric label="In" value={branch.incomingReceivedQty} color="green" />
+        <QuantityMetric label="Out" value={branch.outgoingSentQty} />
+        <QuantityMetric label="Pending In" value={branch.pendingIncomingQty} color="amber" />
+      </div>
+      </div>
     </Card>
+  )
+}
+
+function RouteItemGroupCard({ group }: { group: RouteItemGroup }) {
+  const receiverGroups = groupRouteRowsByReceiver(group.rows)
+  const totalQty = group.rows.reduce((sum, row) => sum + row.quantitySent, 0)
+
+  return (
+    <Card className="overflow-hidden bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#F3B4AF] hover:shadow-md">
+      <div className="flex items-start justify-between gap-4 bg-[#111111] px-4 py-3 text-white">
+        <div className="min-w-0">
+          <h3 className="truncate text-sm font-semibold">{group.branchName}</h3>
+          <p className="mt-0.5 text-xs text-[#D1D5DB]">
+            {formatQty(group.rows.length)} item route{group.rows.length === 1 ? '' : 's'}
+          </p>
+        </div>
+        <p className="shrink-0 font-mono text-lg font-bold tabular">{formatQty(totalQty)}</p>
+      </div>
+
+      <div className="space-y-4 p-4">
+        {receiverGroups.map(receiverGroup => (
+          <div key={receiverGroup.receiverBranchName}>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="rounded-md bg-[#FFF1F0] px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[#E8231A]">To</span>
+              <p className="truncate text-xs font-semibold text-[#111111]">{receiverGroup.receiverBranchName}</p>
+            </div>
+            <div className="space-y-2">
+              {receiverGroup.rows.map(row => (
+                <div key={row.id} className="rounded-lg border border-[#F0F0F0] bg-[#FAFAFA] p-3 transition-colors hover:bg-white">
+                  <p className="text-sm font-medium text-[#111111]">
+                    <span className="font-mono text-lg font-bold tabular text-[#E8231A]">{formatQty(row.quantitySent)}</span>
+                    {row.unit && <span className="ml-1 text-xs text-[#6B7280]">{row.unit}</span>}
+                  </p>
+                  <p className="mt-0.5 text-xs text-[#444444]">{row.itemName}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function QuantityMetric({
+  label,
+  value,
+  color,
+}: {
+  label: string
+  value: number
+  color?: 'green' | 'amber' | 'red'
+}) {
+  const valueColor = color === 'green'
+    ? 'text-green-500'
+    : color === 'amber'
+      ? 'text-amber-500'
+      : color === 'red'
+        ? 'text-red-500'
+        : 'text-[#111111]'
+
+  return (
+    <div className="rounded-lg border border-[#F0F0F0] bg-white px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wider text-[#9CA3AF]">{label}</p>
+      <p className={`mt-0.5 font-mono text-sm font-semibold tabular ${valueColor}`}>{formatQty(value)}</p>
+    </div>
   )
 }
 
@@ -533,7 +815,7 @@ function SummaryCard({
 }) {
   const valueColor = color === 'green' ? 'text-green-400' : color === 'red' ? 'text-red-500' : 'text-[#111111]'
   return (
-    <Card className={`${compact ? 'p-4' : 'p-5'} ${className}`}>
+    <Card className={`bg-white shadow-sm ${compact ? 'p-4' : 'p-5'} ${className}`}>
       <div className={`flex items-center gap-2 ${compact ? 'mb-2' : 'mb-3'} text-[#444444]`}>
         {icon}
         <span className="text-xs uppercase tracking-wider font-medium text-[#888888]">{label}</span>
