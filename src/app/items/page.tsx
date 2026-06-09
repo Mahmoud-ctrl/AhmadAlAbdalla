@@ -3,7 +3,9 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import type { AppRole, Item } from '@/types'
+import { invalidateItems } from '@/lib/data-cache'
+import { useAppProfile } from '@/contexts/profile-context'
+import type { Item } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -13,10 +15,6 @@ import { Dialog } from '@/components/ui/dialog'
 import { ItemAutocomplete } from '@/components/item-autocomplete'
 import { UNITS } from '@/lib/constants'
 import { Plus, Pencil, Trash2, Package } from 'lucide-react'
-
-type Profile = {
-  role: AppRole
-}
 
 type DbError = {
   code?: string
@@ -41,8 +39,8 @@ function itemMutationError(error: DbError) {
 }
 
 export default function ItemsPage() {
+  const profile = useAppProfile()
   const [items, setItems] = useState<Item[]>([])
-  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Item | null>(null)
@@ -54,19 +52,8 @@ export default function ItemsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Item | null>(null)
 
   async function load() {
-    const { data: sessionResult } = await supabase.auth.getSession()
-    const userId = sessionResult.session?.user.id
-
-    const [itemResult, profileResult] = await Promise.all([
-      supabase.from('items').select('*').order('name'),
-      userId
-        ? supabase.from('user_profiles').select('role').eq('id', userId).maybeSingle()
-        : Promise.resolve({ data: null }),
-    ])
-
-    const { data } = itemResult
+    const { data } = await supabase.from('items').select('*').order('name')
     setItems(data || [])
-    setProfile((profileResult.data as Profile | null) ?? null)
     setLoading(false)
   }
 
@@ -108,6 +95,7 @@ export default function ItemsPage() {
     toast.success(editing ? 'Item updated' : 'Item added')
     setSaving(false)
     setDialogOpen(false)
+    invalidateItems()
     load()
   }
 
@@ -121,6 +109,7 @@ export default function ItemsPage() {
     }
     toast.success('Item deleted')
     setDeleteTarget(null)
+    invalidateItems()
     load()
   }
 

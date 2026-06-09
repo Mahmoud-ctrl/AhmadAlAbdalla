@@ -3,7 +3,8 @@
 import Image from 'next/image'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowLeftRight,
   BarChart3,
@@ -11,12 +12,13 @@ import {
   Boxes,
   LayoutDashboard,
   LogOut,
+  MoreHorizontal,
   Package,
   Plus,
   Users,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import type { AppRole } from '@/types'
+import { useAppProfile } from '@/contexts/profile-context'
 import { cn } from '@/lib/utils'
 
 const links = [
@@ -29,49 +31,22 @@ const links = [
   { href: '/users', label: 'Users', icon: Users, adminOnly: true },
 ]
 
-type NavProfile = {
-  role: AppRole
-  username: string
-  full_name: string | null
-  branch: { name: string } | null
-}
-
 export function Nav() {
   const pathname = usePathname()
   const router = useRouter()
-  const [profile, setProfile] = useState<NavProfile | null>(null)
+  const profile = useAppProfile()
   const [signingOut, setSigningOut] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-
-    async function loadProfile() {
-      const { data: sessionResult } = await supabase.auth.getSession()
-      const userId = sessionResult.session?.user.id
-
-      if (!userId) return
-
-      const { data } = await supabase
-        .from('user_profiles')
-        .select('role, username, full_name, branch:branches(name)')
-        .eq('id', userId)
-        .maybeSingle()
-
-      if (!cancelled) {
-        setProfile((data as unknown as NavProfile | null) ?? null)
-      }
-    }
-
-    loadProfile()
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const [moreOpen, setMoreOpen] = useState(false)
 
   const visibleLinks = useMemo(
     () => links.filter(link => !link.adminOnly || profile?.role === 'super_admin'),
     [profile?.role]
+  )
+
+  const primaryLinks = visibleLinks.filter(link => !link.adminOnly)
+  const secondaryLinks = visibleLinks.filter(link => link.adminOnly)
+  const secondaryActive = secondaryLinks.some(({ href }) =>
+    href === '/' ? pathname === '/' : pathname.startsWith(href)
   )
 
   const roleLabel = profile?.role === 'super_admin' ? 'Super Admin' : 'Branch Manager'
@@ -156,13 +131,56 @@ export function Nav() {
         </div>
       </header>
 
+      <AnimatePresence>
+        {moreOpen && (
+          <>
+            <motion.div
+              key="backdrop"
+              className="lg:hidden fixed inset-0 z-40 print:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={() => setMoreOpen(false)}
+            />
+            <motion.div
+              key="panel"
+              className="lg:hidden fixed bottom-14 inset-x-0 z-50 mx-3 mb-2 rounded-xl border border-[#E5E5E5] bg-white shadow-xl overflow-hidden print:hidden"
+              initial={{ opacity: 0, y: 12, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.97 }}
+              transition={{ duration: 0.18, ease: [0.25, 0.46, 0.45, 0.94] }}
+            >
+              {secondaryLinks.map(({ href, label, icon: Icon }) => {
+                const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    onClick={() => setMoreOpen(false)}
+                    className={cn(
+                      'flex items-center gap-3 px-5 py-3.5 text-sm font-medium border-b border-[#F0F0F0] last:border-0 transition-colors',
+                      active ? 'text-[#E8231A] bg-[#E8231A]/5' : 'text-[#444444] hover:bg-[#F8F8F8]'
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" strokeWidth={active ? 2.5 : 1.75} />
+                    {label}
+                  </Link>
+                )
+              })}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white border-t border-[#E5E5E5] flex print:hidden">
-        {visibleLinks.map(({ href, label, icon: Icon }) => {
+        {primaryLinks.map(({ href, label, icon: Icon }) => {
           const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
           return (
             <Link
               key={href}
               href={href}
+              onClick={() => setMoreOpen(false)}
               className={cn(
                 'flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-medium transition-colors',
                 active ? 'text-[#E8231A]' : 'text-[#9CA3AF]'
@@ -173,6 +191,19 @@ export function Nav() {
             </Link>
           )
         })}
+        {secondaryLinks.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setMoreOpen(o => !o)}
+            className={cn(
+              'flex-1 flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-medium transition-colors',
+              moreOpen || secondaryActive ? 'text-[#E8231A]' : 'text-[#9CA3AF]'
+            )}
+          >
+            <MoreHorizontal className="h-5 w-5" strokeWidth={moreOpen || secondaryActive ? 2.5 : 1.75} />
+            More
+          </button>
+        )}
       </nav>
     </>
   )

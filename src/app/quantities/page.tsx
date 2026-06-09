@@ -3,19 +3,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownUp, Boxes, Filter, Search } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import type { AppRole, Branch, Item, TransferRow, TransferStatus } from '@/types'
+import { fetchBranches, fetchItems } from '@/lib/data-cache'
+import { useAppProfile } from '@/contexts/profile-context'
+import type { Branch, Item, TransferRow, TransferStatus } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-
-type Profile = {
-  branch_id: string | null
-  role: AppRole
-  branch: Pick<Branch, 'id' | 'name'> | null
-}
 
 type DirectionFilter = 'all' | 'incoming' | 'outgoing'
 type SortKey = 'branch' | 'item' | 'incoming' | 'outgoing' | 'pending' | 'discrepancy' | 'net'
@@ -54,7 +50,7 @@ function dateInputValue(date: string) {
 }
 
 export default function QuantitiesPage() {
-  const [profile, setProfile] = useState<Profile | null>(null)
+  const profile = useAppProfile()
   const [branches, setBranches] = useState<Branch[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [transfers, setTransfers] = useState<TransferRow[]>([])
@@ -73,36 +69,29 @@ export default function QuantitiesPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: sessionResult } = await supabase.auth.getSession()
-      const userId = sessionResult.session?.user.id
-
-      const [profileResult, branchResult, itemResult, transferResult] = await Promise.all([
-        userId
-          ? supabase
-              .from('user_profiles')
-              .select('branch_id, role, branch:branches(id,name)')
-              .eq('id', userId)
-              .maybeSingle()
-          : Promise.resolve({ data: null }),
-        supabase.from('branches').select('*').order('name'),
-        supabase.from('items').select('*').order('name'),
+      const [branchData, itemData, transferResult] = await Promise.all([
+        fetchBranches(),
+        fetchItems(),
         supabase
           .from('transfers')
           .select('id, status, sent_at, received_at, sender_branch_id, receiver_branch_id, sender_branch:branches!sender_branch_id(id,name,location), receiver_branch:branches!receiver_branch_id(id,name,location), transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit))')
           .order('sent_at', { ascending: false }),
       ])
 
-      const nextProfile = (profileResult.data as unknown as Profile | null) ?? null
-      setProfile(nextProfile)
-      setBranches(branchResult.data ?? [])
-      setItems(itemResult.data ?? [])
+      setBranches(branchData)
+      setItems(itemData)
       setTransfers((transferResult.data as unknown as TransferRow[]) ?? [])
-      setBranchFilter(nextProfile?.role === 'branch_manager' && nextProfile.branch_id ? nextProfile.branch_id : 'all')
       setLoading(false)
     }
 
     load()
   }, [])
+
+  useEffect(() => {
+    if (profile?.role === 'branch_manager' && profile.branch_id) {
+      setBranchFilter(profile.branch_id)
+    }
+  }, [profile])
 
   const selectedBranchId = profile?.role === 'branch_manager' ? profile.branch_id ?? 'all' : branchFilter
   const isManager = profile?.role === 'branch_manager'
@@ -392,44 +381,90 @@ export default function QuantitiesPage() {
         ) : rows.length === 0 ? (
           <div className="px-6 py-12 text-center text-sm text-[#888888]">No quantities match the selected filters.</div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Branch</TableHead>
-                <TableHead>Item</TableHead>
-                <TableHead className="text-right">Incoming Received</TableHead>
-                <TableHead className="text-right">Outgoing Sent</TableHead>
-                <TableHead className="text-right">Pending Incoming</TableHead>
-                <TableHead className="text-right">Net</TableHead>
-                <TableHead className="text-right">Discrepancy</TableHead>
-                <TableHead className="text-right">Lines</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+          <>
+            {/* Mobile card view */}
+            <div className="sm:hidden divide-y divide-[#F0F0F0]">
               {rows.map(row => {
                 const net = row.incomingReceived - row.outgoingSent
                 return (
-                  <TableRow key={row.key}>
-                    <TableCell className="font-medium">{row.branchName}</TableCell>
-                    <TableCell>
-                      <p className="font-medium">{row.itemName}</p>
-                      <p className="text-xs text-[#888888]">{row.unit}</p>
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs tabular">{formatQty(row.incomingReceived)}</TableCell>
-                    <TableCell className="text-right font-mono text-xs tabular">{formatQty(row.outgoingSent)}</TableCell>
-                    <TableCell className="text-right font-mono text-xs tabular text-amber-500">{formatQty(row.pendingIncoming)}</TableCell>
-                    <TableCell className={`text-right font-mono text-xs tabular ${net < 0 ? 'text-red-500' : net > 0 ? 'text-green-500' : 'text-[#888888]'}`}>
-                      {formatQty(net)}
-                    </TableCell>
-                    <TableCell className={`text-right font-mono text-xs tabular ${row.discrepancy > 0 ? 'text-red-500' : 'text-[#888888]'}`}>
-                      {formatQty(row.discrepancy)}
-                    </TableCell>
-                    <TableCell className="text-right font-mono text-xs tabular text-[#888888]">{row.transferCount}</TableCell>
-                  </TableRow>
+                  <div key={row.key} className="p-4 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="font-medium text-sm text-[#111111]">{row.branchName}</p>
+                        <p className="text-sm text-[#444444]">{row.itemName}</p>
+                        <p className="text-xs text-[#888888]">{row.unit}</p>
+                      </div>
+                      <p className="text-xs text-[#888888] font-mono shrink-0">{row.transferCount} lines</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                      <div className="flex justify-between gap-2">
+                        <span className="text-[#888888]">Incoming</span>
+                        <span className="font-mono">{formatQty(row.incomingReceived)}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-[#888888]">Outgoing</span>
+                        <span className="font-mono">{formatQty(row.outgoingSent)}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-[#888888]">Pending</span>
+                        <span className="font-mono text-amber-500">{formatQty(row.pendingIncoming)}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-[#888888]">Net</span>
+                        <span className={`font-mono ${net < 0 ? 'text-red-500' : net > 0 ? 'text-green-500' : 'text-[#888888]'}`}>{formatQty(net)}</span>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <span className="text-[#888888]">Discrepancy</span>
+                        <span className={`font-mono ${row.discrepancy > 0 ? 'text-red-500' : 'text-[#888888]'}`}>{formatQty(row.discrepancy)}</span>
+                      </div>
+                    </div>
+                  </div>
                 )
               })}
-            </TableBody>
-          </Table>
+            </div>
+
+            {/* Desktop table view */}
+            <div className="hidden sm:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Branch</TableHead>
+                    <TableHead>Item</TableHead>
+                    <TableHead className="text-right">Incoming Received</TableHead>
+                    <TableHead className="text-right">Outgoing Sent</TableHead>
+                    <TableHead className="text-right">Pending Incoming</TableHead>
+                    <TableHead className="text-right">Net</TableHead>
+                    <TableHead className="text-right">Discrepancy</TableHead>
+                    <TableHead className="text-right">Lines</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map(row => {
+                    const net = row.incomingReceived - row.outgoingSent
+                    return (
+                      <TableRow key={row.key}>
+                        <TableCell className="font-medium">{row.branchName}</TableCell>
+                        <TableCell>
+                          <p className="font-medium">{row.itemName}</p>
+                          <p className="text-xs text-[#888888]">{row.unit}</p>
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs tabular">{formatQty(row.incomingReceived)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs tabular">{formatQty(row.outgoingSent)}</TableCell>
+                        <TableCell className="text-right font-mono text-xs tabular text-amber-500">{formatQty(row.pendingIncoming)}</TableCell>
+                        <TableCell className={`text-right font-mono text-xs tabular ${net < 0 ? 'text-red-500' : net > 0 ? 'text-green-500' : 'text-[#888888]'}`}>
+                          {formatQty(net)}
+                        </TableCell>
+                        <TableCell className={`text-right font-mono text-xs tabular ${row.discrepancy > 0 ? 'text-red-500' : 'text-[#888888]'}`}>
+                          {formatQty(row.discrepancy)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs tabular text-[#888888]">{row.transferCount}</TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </>
         )}
       </Card>
     </div>

@@ -7,19 +7,16 @@ import { toast } from 'sonner'
 import { ArrowLeft, ArrowRight, Plus, Trash2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import type { AppRole, Branch, Item } from '@/types'
+import { isDecimalUnit } from '@/lib/constants'
+import { fetchBranches, fetchItems } from '@/lib/data-cache'
+import { useAppProfile } from '@/contexts/profile-context'
+import type { Branch, Item } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-
-type Profile = {
-  branch_id: string | null
-  role: AppRole
-  branch: Pick<Branch, 'id' | 'name'> | null
-}
 
 type DraftLine = {
   itemId: string
@@ -30,9 +27,9 @@ const emptyLine = (): DraftLine => ({ itemId: '', quantity: '' })
 
 export default function NewTransferPage() {
   const router = useRouter()
+  const profile = useAppProfile()
   const [branches, setBranches] = useState<Branch[]>([])
   const [items, setItems] = useState<Item[]>([])
-  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -44,24 +41,9 @@ export default function NewTransferPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: sessionResult } = await supabase.auth.getSession()
-      const userId = sessionResult.session?.user.id
-
-      const [branchResult, itemResult, profileResult] = await Promise.all([
-        supabase.from('branches').select('*').order('name'),
-        supabase.from('items').select('*').order('name'),
-        userId
-          ? supabase
-              .from('user_profiles')
-              .select('branch_id, role, branch:branches(id,name)')
-              .eq('id', userId)
-              .maybeSingle()
-          : Promise.resolve({ data: null }),
-      ])
-
-      setBranches(branchResult.data ?? [])
-      setItems(itemResult.data ?? [])
-      setProfile((profileResult.data as unknown as Profile | null) ?? null)
+      const [branchData, itemData] = await Promise.all([fetchBranches(), fetchItems()])
+      setBranches(branchData)
+      setItems(itemData)
       setLoading(false)
     }
 
@@ -120,6 +102,12 @@ export default function NewTransferPage() {
 
       if (!Number.isFinite(line.quantity_sent) || line.quantity_sent <= 0) {
         toast.error('Every line quantity must be greater than 0.')
+        return
+      }
+
+      const lineItem = items.find(candidate => candidate.id === line.item_id)
+      if (lineItem && !isDecimalUnit(lineItem.unit) && !Number.isInteger(line.quantity_sent)) {
+        toast.error(`Quantity for "${lineItem.name}" must be a whole number (unit: ${lineItem.unit}).`)
         return
       }
 
@@ -218,6 +206,7 @@ export default function NewTransferPage() {
               const item = items.find(candidate => candidate.id === line.itemId)
               const quantity = Number(line.quantity)
               const value = item && Number.isFinite(quantity) ? quantity * Number(item.price_per_unit) : 0
+              const decimal = item ? isDecimalUnit(item.unit) : false
 
               return (
                 <div key={index} className="grid grid-cols-[1fr,120px,90px,auto] gap-2 items-end">
@@ -237,8 +226,8 @@ export default function NewTransferPage() {
                     <Input
                       id={`quantity-${index}`}
                       type="number"
-                      min="0.01"
-                      step="0.01"
+                      min={decimal ? '0.01' : '1'}
+                      step={decimal ? '0.01' : '1'}
                       value={line.quantity}
                       onChange={e => updateLine(index, { quantity: e.target.value })}
                     />

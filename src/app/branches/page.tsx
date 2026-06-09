@@ -3,7 +3,9 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import type { AppRole, Branch } from '@/types'
+import { invalidateBranches } from '@/lib/data-cache'
+import { useAppProfile } from '@/contexts/profile-context'
+import type { Branch } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -15,10 +17,6 @@ type BranchWithStats = Branch & {
   outgoingValue: number
   incomingValue: number
   discrepancyValue: number
-}
-
-type Profile = {
-  role: AppRole
 }
 
 type DbError = {
@@ -44,8 +42,8 @@ function branchMutationError(error: DbError) {
 }
 
 export default function BranchesPage() {
+  const profile = useAppProfile()
   const [branches, setBranches] = useState<BranchWithStats[]>([])
-  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Branch | null>(null)
@@ -55,15 +53,9 @@ export default function BranchesPage() {
   const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null)
 
   async function load() {
-    const { data: sessionResult } = await supabase.auth.getSession()
-    const userId = sessionResult.session?.user.id
-
-    const [{ data: branchData }, { data: transfers }, profileResult] = await Promise.all([
+    const [{ data: branchData }, { data: transfers }] = await Promise.all([
       supabase.from('branches').select('*').order('name'),
       supabase.from('transfers').select('sender_branch_id, receiver_branch_id, status, transfer_lines(quantity_sent, quantity_received, unit_price_snapshot)'),
-      userId
-        ? supabase.from('user_profiles').select('role').eq('id', userId).maybeSingle()
-        : Promise.resolve({ data: null }),
     ])
 
     const branchList = branchData || []
@@ -88,7 +80,6 @@ export default function BranchesPage() {
     })
 
     setBranches(withStats)
-    setProfile((profileResult.data as Profile | null) ?? null)
     setLoading(false)
   }
 
@@ -119,6 +110,7 @@ export default function BranchesPage() {
     toast.success(editing ? 'Branch updated' : 'Branch added')
     setSaving(false)
     setDialogOpen(false)
+    invalidateBranches()
     load()
   }
 
@@ -132,6 +124,7 @@ export default function BranchesPage() {
     }
     toast.success('Branch deleted')
     setDeleteTarget(null)
+    invalidateBranches()
     load()
   }
 

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { ArrowLeftRight, ArrowRight, ChevronLeft, ChevronRight, LayoutGrid, Plus, Table2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { fetchBranches } from '@/lib/data-cache'
 import type { Branch, TransferRow, TransferStatus } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
@@ -46,16 +47,16 @@ export default function TransfersPage() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: transferData }, { data: branchData }] = await Promise.all([
+      const [{ data: transferData }, branchData] = await Promise.all([
         supabase
           .from('transfers')
           .select('id, status, sent_at, received_at, notes, sender_branch:branches!sender_branch_id(id,name,location), receiver_branch:branches!receiver_branch_id(id,name,location), transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit))')
           .order('sent_at', { ascending: false }),
-        supabase.from('branches').select('*').order('name'),
+        fetchBranches(),
       ])
 
       setTransfers((transferData as unknown as TransferRow[]) ?? [])
-      setBranches(branchData ?? [])
+      setBranches(branchData)
       setLoading(false)
     }
 

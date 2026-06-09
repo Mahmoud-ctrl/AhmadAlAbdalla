@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AlertCircle, CheckCircle, Clock, Download, Filter, Printer, TrendingUp } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { fetchBranches, fetchItems } from '@/lib/data-cache'
 import type { Branch, Item, TransferRow, TransferStatus } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -109,17 +110,17 @@ export default function ReportPage() {
 
   useEffect(() => {
     async function load() {
-      const [{ data: branchData }, { data: itemData }, { data: transferData }] = await Promise.all([
-        supabase.from('branches').select('*').order('name'),
-        supabase.from('items').select('*').order('name'),
+      const [branchData, itemData, { data: transferData }] = await Promise.all([
+        fetchBranches(),
+        fetchItems(),
         supabase
           .from('transfers')
           .select('id, status, sent_at, sender_branch_id, receiver_branch_id, transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit))')
           .order('sent_at', { ascending: false }),
       ])
 
-      setBranches(branchData ?? [])
-      setItems(itemData ?? [])
+      setBranches(branchData)
+      setItems(itemData)
       setTransfers((transferData as unknown as TransferRow[]) ?? [])
       setLoading(false)
     }

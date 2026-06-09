@@ -7,7 +7,9 @@ import { toast } from 'sonner'
 import { ArrowLeft, ArrowRight, CheckCircle, ShieldCheck } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import type { AppRole, TransferRow, TransferStatus } from '@/types'
+import { isDecimalUnit } from '@/lib/constants'
+import { useAppProfile } from '@/contexts/profile-context'
+import type { TransferRow, TransferStatus } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -15,11 +17,6 @@ import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { StatusBadge } from '@/components/status-badge'
-
-type Profile = {
-  branch_id: string | null
-  role: AppRole
-}
 
 function lineSentValue(line: TransferRow['transfer_lines'][number]) {
   return Number(line.quantity_sent) * Number(line.unit_price_snapshot)
@@ -32,8 +29,8 @@ function lineReceivedValue(line: TransferRow['transfer_lines'][number]) {
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>()
 
+  const profile = useAppProfile()
   const [transfer, setTransfer] = useState<TransferRow | null>(null)
-  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [receivedQuantities, setReceivedQuantities] = useState<Record<string, string>>({})
@@ -45,23 +42,12 @@ export default function TransferDetailPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const { data: sessionResult } = await supabase.auth.getSession()
-    const userId = sessionResult.session?.user.id
 
-    const [transferResult, profileResult] = await Promise.all([
-      supabase
-        .from('transfers')
-        .select('id, status, sent_at, received_at, resolved_at, notes, admin_notes, sender_branch_id, receiver_branch_id, sender_branch:branches!sender_branch_id(id,name,location), receiver_branch:branches!receiver_branch_id(id,name,location), transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit)), transfer_events(id, transfer_id, actor_id, event_type, details, created_at)')
-        .eq('id', id)
-        .single(),
-      userId
-        ? supabase
-            .from('user_profiles')
-            .select('branch_id, role')
-            .eq('id', userId)
-            .maybeSingle()
-        : Promise.resolve({ data: null }),
-    ])
+    const transferResult = await supabase
+      .from('transfers')
+      .select('id, status, sent_at, received_at, resolved_at, notes, admin_notes, sender_branch_id, receiver_branch_id, sender_branch:branches!sender_branch_id(id,name,location), receiver_branch:branches!receiver_branch_id(id,name,location), transfer_lines(id, transfer_id, item_id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit)), transfer_events(id, transfer_id, actor_id, event_type, details, created_at)')
+      .eq('id', id)
+      .single()
 
     if (transferResult.error || !transferResult.data) {
       setNotFound(true)
@@ -71,7 +57,6 @@ export default function TransferDetailPage() {
 
     const nextTransfer = transferResult.data as unknown as TransferRow
     setTransfer(nextTransfer)
-    setProfile((profileResult.data as Profile | null) ?? null)
     setReceivedQuantities(
       Object.fromEntries(
         nextTransfer.transfer_lines.map(line => [
@@ -117,6 +102,11 @@ export default function TransferDetailPage() {
     for (const line of lines) {
       if (!Number.isFinite(line.quantity_received) || line.quantity_received < 0) {
         toast.error('Received quantities must be zero or greater.')
+        return
+      }
+      const transferLine = transfer.transfer_lines.find(l => l.id === line.line_id)
+      if (transferLine && !isDecimalUnit(transferLine.item?.unit ?? '') && !Number.isInteger(line.quantity_received)) {
+        toast.error(`Received quantity for "${transferLine.item?.name}" must be a whole number (unit: ${transferLine.item?.unit}).`)
         return
       }
     }
@@ -215,7 +205,44 @@ export default function TransferDetailPage() {
           <div className="p-5 border-b border-[#E5E5E5]">
             <p className="text-xs font-medium text-[#444444] uppercase tracking-wider">Transfer Lines</p>
           </div>
-          <div className="overflow-x-auto">
+
+          {/* Mobile card view */}
+          <div className="sm:hidden divide-y divide-[#F0F0F0]">
+            {transfer.transfer_lines.map(line => {
+              const difference = Number(line.quantity_received ?? 0) - Number(line.quantity_sent)
+              return (
+                <div key={line.id} className="p-4 space-y-2">
+                  <div>
+                    <p className="font-medium text-sm text-[#111111]">{line.item?.name}</p>
+                    <p className="text-xs text-[#888888]">{line.item?.unit} · {formatCurrency(Number(line.unit_price_snapshot))}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-[#888888]">Sent</span>
+                      <span className="font-mono">{Number(line.quantity_sent)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#888888]">Received</span>
+                      <span className="font-mono">{line.quantity_received === null ? '-' : Number(line.quantity_received)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#888888]">Value</span>
+                      <span className="font-mono">{formatCurrency(lineSentValue(line))}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#888888]">Difference</span>
+                      <span className={`font-mono ${difference === 0 ? 'text-[#888888]' : 'text-red-500'}`}>
+                        {line.quantity_received === null ? '-' : difference}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Desktop table view */}
+          <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[#F0F0F0] text-left text-xs text-[#888888]">
@@ -266,7 +293,7 @@ export default function TransferDetailPage() {
             <form onSubmit={handleReceive} className="space-y-4">
               <div className="grid gap-3">
                 {transfer.transfer_lines.map(line => (
-                  <div key={line.id} className="grid grid-cols-[1fr,140px] gap-3 items-end">
+                  <div key={line.id} className="grid grid-cols-1 sm:grid-cols-[1fr,140px] gap-2 sm:gap-3 sm:items-end">
                     <div>
                       <p className="text-sm font-medium text-[#111111]">{line.item?.name}</p>
                       <p className="text-xs text-[#888888]">Sent: {Number(line.quantity_sent)} {line.item?.unit}</p>
@@ -277,7 +304,7 @@ export default function TransferDetailPage() {
                         id={`received-${line.id}`}
                         type="number"
                         min="0"
-                        step="0.01"
+                        step={isDecimalUnit(line.item?.unit ?? '') ? '0.01' : '1'}
                         value={receivedQuantities[line.id] ?? ''}
                         onChange={e => setReceivedQuantities(current => ({ ...current, [line.id]: e.target.value }))}
                       />
