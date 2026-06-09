@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import { Item } from '@/types'
+import type { AppRole, Item } from '@/types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
@@ -13,8 +14,35 @@ import { ItemAutocomplete } from '@/components/item-autocomplete'
 import { UNITS } from '@/lib/constants'
 import { Plus, Pencil, Trash2, Package } from 'lucide-react'
 
+type Profile = {
+  role: AppRole
+}
+
+type DbError = {
+  code?: string
+  message: string
+}
+
+function isPermissionError(error: DbError) {
+  const message = error.message.toLowerCase()
+
+  return error.code === '42501'
+    || message.includes('row-level security')
+    || message.includes('permission')
+    || message.includes('not authorized')
+}
+
+function itemMutationError(error: DbError) {
+  if (isPermissionError(error)) {
+    return 'Super admin access with MFA is required.'
+  }
+
+  return error.message
+}
+
 export default function ItemsPage() {
   const [items, setItems] = useState<Item[]>([])
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Item | null>(null)
@@ -26,18 +54,33 @@ export default function ItemsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Item | null>(null)
 
   async function load() {
-    const { data } = await supabase.from('items').select('*').order('name')
+    const { data: sessionResult } = await supabase.auth.getSession()
+    const userId = sessionResult.session?.user.id
+
+    const [itemResult, profileResult] = await Promise.all([
+      supabase.from('items').select('*').order('name'),
+      userId
+        ? supabase.from('user_profiles').select('role').eq('id', userId).maybeSingle()
+        : Promise.resolve({ data: null }),
+    ])
+
+    const { data } = itemResult
     setItems(data || [])
+    setProfile((profileResult.data as Profile | null) ?? null)
     setLoading(false)
   }
 
   useEffect(() => { load() }, [])
 
+  const isSuperAdmin = profile?.role === 'super_admin'
+
   function openAdd() {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     setEditing(null); setSelectedSuggestion(null); setName(''); setUnit(''); setPrice(''); setDialogOpen(true)
   }
 
   function openEdit(item: Item) {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     setEditing(item); setSelectedSuggestion(item); setName(item.name); setUnit(item.unit)
     setPrice(String(item.price_per_unit)); setDialogOpen(true)
   }
@@ -49,6 +92,7 @@ export default function ItemsPage() {
   }
 
   async function save() {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     if (!name.trim()) { toast.error('Item name is required'); return }
     if (!unit.trim()) { toast.error('Unit is required'); return }
     const priceNum = parseFloat(price)
@@ -60,7 +104,7 @@ export default function ItemsPage() {
       ? await supabase.from('items').update(payload).eq('id', editing.id)
       : await supabase.from('items').insert(payload)
 
-    if (error) { toast.error(error.message); setSaving(false); return }
+    if (error) { toast.error(itemMutationError(error)); setSaving(false); return }
     toast.success(editing ? 'Item updated' : 'Item added')
     setSaving(false)
     setDialogOpen(false)
@@ -68,8 +112,13 @@ export default function ItemsPage() {
   }
 
   async function confirmDelete(item: Item) {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     const { error } = await supabase.from('items').delete().eq('id', item.id)
-    if (error) { toast.error('Cannot delete — item has transfers'); setDeleteTarget(null); return }
+    if (error) {
+      toast.error(error.code === '23503' ? 'Cannot delete - item has transfers' : itemMutationError(error))
+      setDeleteTarget(null)
+      return
+    }
     toast.success('Item deleted')
     setDeleteTarget(null)
     load()
@@ -82,14 +131,23 @@ export default function ItemsPage() {
           <h1 className="text-xl font-semibold text-[#111111]">Items</h1>
           <p className="text-sm text-[#888888] mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''} in catalog</p>
         </div>
-        <Button onClick={openAdd}>
-          <Plus className="h-4 w-4" />
-          Add Item
-        </Button>
+        {isSuperAdmin && (
+          <Button onClick={openAdd}>
+            <Plus className="h-4 w-4" />
+            Add Item
+          </Button>
+        )}
       </div>
 
       {loading ? (
         <div className="py-16 text-center text-sm text-[#444444]">Loading…</div>
+      ) : !isSuperAdmin ? (
+        <Card className="p-5 bg-white">
+          <p className="text-sm font-medium text-[#111111]">Super admin access with MFA is required.</p>
+          <p className="mt-1 text-sm text-[#888888]">
+            Item management is protected by Supabase row level security and is only available to verified super admins.
+          </p>
+        </Card>
       ) : items.length === 0 ? (
         <div className="py-16 text-center">
           <Package className="h-8 w-8 text-[#D1D5DB] mx-auto mb-3" />

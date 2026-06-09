@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
-import { Branch } from '@/types'
+import type { AppRole, Branch } from '@/types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog } from '@/components/ui/dialog'
@@ -16,8 +17,35 @@ type BranchWithStats = Branch & {
   discrepancyValue: number
 }
 
+type Profile = {
+  role: AppRole
+}
+
+type DbError = {
+  code?: string
+  message: string
+}
+
+function isPermissionError(error: DbError) {
+  const message = error.message.toLowerCase()
+
+  return error.code === '42501'
+    || message.includes('row-level security')
+    || message.includes('permission')
+    || message.includes('not authorized')
+}
+
+function branchMutationError(error: DbError) {
+  if (isPermissionError(error)) {
+    return 'Super admin access with MFA is required.'
+  }
+
+  return error.message
+}
+
 export default function BranchesPage() {
   const [branches, setBranches] = useState<BranchWithStats[]>([])
+  const [profile, setProfile] = useState<Profile | null>(null)
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Branch | null>(null)
@@ -27,9 +55,15 @@ export default function BranchesPage() {
   const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null)
 
   async function load() {
-    const [{ data: branchData }, { data: transfers }] = await Promise.all([
+    const { data: sessionResult } = await supabase.auth.getSession()
+    const userId = sessionResult.session?.user.id
+
+    const [{ data: branchData }, { data: transfers }, profileResult] = await Promise.all([
       supabase.from('branches').select('*').order('name'),
       supabase.from('transfers').select('sender_branch_id, receiver_branch_id, status, transfer_lines(quantity_sent, quantity_received, unit_price_snapshot)'),
+      userId
+        ? supabase.from('user_profiles').select('role').eq('id', userId).maybeSingle()
+        : Promise.resolve({ data: null }),
     ])
 
     const branchList = branchData || []
@@ -54,20 +88,26 @@ export default function BranchesPage() {
     })
 
     setBranches(withStats)
+    setProfile((profileResult.data as Profile | null) ?? null)
     setLoading(false)
   }
 
   useEffect(() => { load() }, [])
 
+  const isSuperAdmin = profile?.role === 'super_admin'
+
   function openAdd() {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     setEditing(null); setName(''); setLocation(''); setDialogOpen(true)
   }
 
   function openEdit(b: Branch) {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     setEditing(b); setName(b.name); setLocation(b.location ?? ''); setDialogOpen(true)
   }
 
   async function save() {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     if (!name.trim()) { toast.error('Branch name is required'); return }
     setSaving(true)
     const payload = { name: name.trim(), location: location.trim() || null }
@@ -75,7 +115,7 @@ export default function BranchesPage() {
       ? await supabase.from('branches').update(payload).eq('id', editing.id)
       : await supabase.from('branches').insert(payload)
 
-    if (error) { toast.error(error.message); setSaving(false); return }
+    if (error) { toast.error(branchMutationError(error)); setSaving(false); return }
     toast.success(editing ? 'Branch updated' : 'Branch added')
     setSaving(false)
     setDialogOpen(false)
@@ -83,8 +123,13 @@ export default function BranchesPage() {
   }
 
   async function confirmDelete(b: Branch) {
+    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
     const { error } = await supabase.from('branches').delete().eq('id', b.id)
-    if (error) { toast.error('Cannot delete — branch has transfers'); setDeleteTarget(null); return }
+    if (error) {
+      toast.error(error.code === '23503' ? 'Cannot delete - branch has transfers' : branchMutationError(error))
+      setDeleteTarget(null)
+      return
+    }
     toast.success('Branch deleted')
     setDeleteTarget(null)
     load()
@@ -97,14 +142,23 @@ export default function BranchesPage() {
           <h1 className="text-xl font-semibold text-[#111111]">Branches</h1>
           <p className="text-sm text-[#888888] mt-0.5">{branches.length} branch{branches.length !== 1 ? 'es' : ''} registered</p>
         </div>
-        <Button onClick={openAdd}>
-          <Plus className="h-4 w-4" />
-          Add Branch
-        </Button>
+        {isSuperAdmin && (
+          <Button onClick={openAdd}>
+            <Plus className="h-4 w-4" />
+            Add Branch
+          </Button>
+        )}
       </div>
 
       {loading ? (
         <div className="py-16 text-center text-sm text-[#444444]">Loading…</div>
+      ) : !isSuperAdmin ? (
+        <Card className="p-5 bg-white">
+          <p className="text-sm font-medium text-[#111111]">Super admin access with MFA is required.</p>
+          <p className="mt-1 text-sm text-[#888888]">
+            Branch management is protected by Supabase row level security and is only available to verified super admins.
+          </p>
+        </Card>
       ) : branches.length === 0 ? (
         <div className="py-16 text-center">
           <Building2 className="h-8 w-8 text-[#D1D5DB] mx-auto mb-3" />
