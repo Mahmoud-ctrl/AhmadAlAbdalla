@@ -1,16 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { CheckCircle, Clock, Download, Filter, Printer, TrendingUp } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { fetchBranches } from '@/lib/data-cache'
 import type { Branch, TransferRow, TransferStatus } from '@/types'
+import { useAppProfile } from '@/contexts/profile-context'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 type BranchStat = Branch & {
   incomingReceivedQty: number
@@ -39,6 +39,11 @@ type ReceiverRouteGroup = {
   receiverBranchName: string
   rows: RouteItemStat[]
 }
+
+type PivotCell = { in: number; out: number }
+type PivotItem = { id: string; name: string; unit: string }
+type PivotRow = { branchId: string; branchName: string; cells: Map<string, PivotCell> }
+type PivotData = { items: PivotItem[]; rows: PivotRow[] }
 
 type DatePreset = 'all' | 'today' | 'week' | 'month' | 'last_month' | 'custom'
 
@@ -175,6 +180,8 @@ function csvRow(values: CsvRow) {
 }
 
 export default function ReportPage() {
+  const profile = useAppProfile()
+
   const [branches, setBranches] = useState<Branch[]>([])
   const [transfers, setTransfers] = useState<TransferRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -257,9 +264,28 @@ export default function ReportPage() {
     return buildRouteItemGroups(branches, filteredTransfers)
   }, [branches, filteredTransfers])
 
-  const routeItemRows = useMemo(() => {
-    return routeItemGroups.flatMap(group => group.rows)
-  }, [routeItemGroups])
+  const pivotData = useMemo<PivotData>(() => {
+    const data = buildPivotTable(branches, filteredTransfers)
+
+    const excluded = new Set<string>()
+    if (branchFilter !== 'all') excluded.add(branchFilter)
+    if (profile?.role === 'branch_manager' && profile.branch_id) excluded.add(profile.branch_id)
+
+    return excluded.size > 0
+      ? { ...data, rows: data.rows.filter(row => !excluded.has(row.branchId)) }
+      : data
+  }, [branches, filteredTransfers, branchFilter, profile])
+
+  // Only show items that have at least one branch with a non-zero net imbalance (in ≠ out).
+  // Perfectly balanced items (all diffs = 0) are excluded entirely — nothing to resolve.
+  const visibleItems = useMemo(() => {
+    return pivotData.items.filter(item =>
+      pivotData.rows.some(row => {
+        const c = row.cells.get(item.id)
+        return c && c.in !== c.out
+      })
+    )
+  }, [pivotData])
 
   const summary = useMemo(() => {
     const sent = filteredTransfers.reduce((sum, transfer) => sum + sentQuantity(transfer), 0)
@@ -278,46 +304,25 @@ export default function ReportPage() {
   }
 
   function exportCsv() {
-    const rows = [
-      csvHeaders,
-      ...branchStats.map(branch => csvRow({
-        Section: 'Branch Summary',
-        Name: branch.name,
-        Unit: 'mixed',
-        Transfers: branch.transferCount,
-        'Total Movement Qty': branch.totalMovementQty.toFixed(2),
-        'Outgoing Sent Qty': branch.outgoingSentQty.toFixed(2),
-        'Incoming Received Qty': branch.incomingReceivedQty.toFixed(2),
-        'Pending Incoming Qty': branch.pendingIncomingQty.toFixed(2),
-      })),
-      ...routeItemGroups.flatMap(group => [
-        csvRow({
-          Section: 'From Branch',
-          Name: group.branchName,
-          'From Branch': group.branchName,
-        }),
-        ...groupRouteRowsByReceiver(group.rows).flatMap(receiverGroup => [
-          csvRow({
-            Section: 'To Branch',
-            Name: receiverGroup.receiverBranchName,
-            'From Branch': group.branchName,
-            'To Branch': receiverGroup.receiverBranchName,
-          }),
-          ...receiverGroup.rows.map(row => csvRow({
-            Section: 'Route Item',
-            Name: row.itemName,
-            Unit: row.unit,
-            'From Branch': row.senderBranchName,
-            'To Branch': row.receiverBranchName,
-            Transfers: row.transferCount,
-            'Qty Sent': row.quantitySent.toFixed(2),
-          })),
-        ]),
-      ]),
-    ]
+    const itemHeaders = visibleItems.flatMap(item => [
+      `${item.name} In${item.unit ? ` (${item.unit})` : ''}`,
+      `${item.name} Out${item.unit ? ` (${item.unit})` : ''}`,
+      `${item.name} Diff${item.unit ? ` (${item.unit})` : ''}`,
+    ])
+    const header = ['Branch', ...itemHeaders]
 
-    const csv = `\uFEFF${rows.map(row => row.map(value => csvEscape(value)).join(',')).join('\n')}`
-    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `quantity-report-${dateInputValue(new Date())}.csv`)
+    const dataRows = pivotData.rows.map(row => {
+      const cells = visibleItems.flatMap(item => {
+        const cell = row.cells.get(item.id)
+        const inQty  = cell?.in  ?? 0
+        const outQty = cell?.out ?? 0
+        return [inQty, outQty, inQty - outQty]
+      })
+      return [row.branchName, ...cells]
+    })
+
+    const csv = `\uFEFF${[header, ...dataRows].map(row => row.map(v => csvEscape(v)).join(',')).join('\n')}`
+    downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8;' }), `item-movement-${dateInputValue(new Date())}.csv`)
   }
 
   async function exportDesignedReport() {
@@ -326,95 +331,69 @@ export default function ReportPage() {
       dateStyle: 'medium',
       timeStyle: 'short',
     }).format(new Date())
-    const filterLabel = dateFrom || dateTo ? `${dateFrom || 'Start'} to ${dateTo || 'Today'}` : 'All time'
-    const branchRowsHtml = branchStats.map(branch => `
-      <tr>
-        <td dir="auto">${htmlEscape(branch.name)}</td>
-        <td>${htmlEscape(branch.transferCount)}</td>
-        <td>${htmlEscape(formatQty(branch.totalMovementQty))}</td>
-        <td>${htmlEscape(formatQty(branch.outgoingSentQty))}</td>
-        <td>${htmlEscape(formatQty(branch.incomingReceivedQty))}</td>
-        <td>${htmlEscape(formatQty(branch.pendingIncomingQty))}</td>
-      </tr>
-    `).join('')
+    const filterLabel = dateFrom || dateTo ? `${dateFrom || 'Start'} → ${dateTo || 'Today'}` : 'All time'
 
-    const routeGroupsHtml = routeItemGroups.map(group => {
-      const receiverGroups = groupRouteRowsByReceiver(group.rows)
-      const totalQty = group.rows.reduce((sum, row) => sum + row.quantitySent, 0)
+    const pivotItemHeadersHtml = visibleItems.map(item =>
+      `<th colspan="3" class="pivot-item-head" dir="auto">${htmlEscape(item.name)}${item.unit ? ` <span class="pivot-unit">(${htmlEscape(item.unit)})</span>` : ''}</th>`
+    ).join('')
 
-      return `
-        <div class="route-card">
-          <div class="route-card-head">
-            <div>
-              <h3 dir="auto">${htmlEscape(group.branchName)}</h3>
-              <p>${htmlEscape(formatQty(group.rows.length))} item routes</p>
-            </div>
-            <strong>${htmlEscape(formatQty(totalQty))}</strong>
-          </div>
-          ${receiverGroups.map(receiverGroup => `
-            <div class="receiver-block">
-              <div class="receiver-title">To <span dir="auto">${htmlEscape(receiverGroup.receiverBranchName)}</span></div>
-              <table class="route">
-                <thead><tr><th>Item</th><th>Unit</th><th>Qty Sent</th><th>Lines</th></tr></thead>
-                <tbody>
-                  ${receiverGroup.rows.map(row => `
-                    <tr>
-                      <td dir="auto">${htmlEscape(row.itemName)}</td>
-                      <td>${htmlEscape(row.unit || '-')}</td>
-                      <td>${htmlEscape(formatQty(row.quantitySent))}</td>
-                      <td>${htmlEscape(row.transferCount)}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          `).join('')}
-        </div>
-      `
+    const pivotSubHeaderHtml = visibleItems.map(() =>
+      `<th class="pivot-in">in</th><th class="pivot-out">out</th><th class="pivot-diff">diff</th>`
+    ).join('')
+
+    const pivotRowsHtml = pivotData.rows.map((row, idx) => {
+      const cells = visibleItems.map(item => {
+        const cell = row.cells.get(item.id)
+        const inVal  = cell && cell.in  > 0 ? `<span class="val-in">${htmlEscape(formatQty(cell.in))}</span>`   : `<span class="val-empty">—</span>`
+        const outVal = cell && cell.out > 0 ? `<span class="val-out">${htmlEscape(formatQty(cell.out))}</span>` : `<span class="val-empty">—</span>`
+        const diff = cell ? cell.in - cell.out : 0
+        const diffVal = diff === 0
+          ? `<span class="val-empty">—</span>`
+          : diff > 0
+            ? `<span class="val-in">+${htmlEscape(formatQty(diff))}</span>`
+            : `<span class="val-out">${htmlEscape(formatQty(diff))}</span>`
+        return `<td class="pivot-cell">${inVal}</td><td class="pivot-cell">${outVal}</td><td class="pivot-cell">${diffVal}</td>`
+      }).join('')
+      return `<tr class="${idx % 2 === 0 ? '' : 'alt'}"><td class="pivot-branch" dir="auto">${htmlEscape(row.branchName)}</td>${cells}</tr>`
     }).join('')
 
     const html = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Quantity Report</title>
+  <title>Item Movement Report</title>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; background: #f4f4f5; color: #111111; font-family: Arial, Helvetica, sans-serif; }
-    .page { max-width: 1180px; margin: 0 auto; padding: 28px; }
+    .page { max-width: 1400px; margin: 0 auto; padding: 28px; }
     .hero { background: #ffffff; border: 1px solid #e5e5e5; border-radius: 14px; overflow: hidden; box-shadow: 0 18px 45px rgba(17,17,17,0.08); }
     .topbar { height: 8px; background: #e8231a; }
-    .header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px 28px; border-bottom: 1px solid #eeeeee; }
-    .brand { display: flex; align-items: center; gap: 18px; min-width: 0; }
-    .logo { max-width: 170px; max-height: 64px; object-fit: contain; }
-    h1 { margin: 0; font-size: 24px; letter-spacing: 0; }
-    .subtitle { margin: 6px 0 0; color: #6b7280; font-size: 13px; }
-    .meta { text-align: right; color: #6b7280; font-size: 12px; line-height: 1.7; white-space: nowrap; }
-    .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 20px 28px; background: #fafafa; }
-    .metric { background: #ffffff; border: 1px solid #eeeeee; border-radius: 10px; padding: 14px; }
-    .metric span { display: block; color: #8a8a8a; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-    .metric strong { display: block; margin-top: 7px; font-size: 22px; font-family: Consolas, 'Courier New', monospace; }
-    .section { padding: 22px 28px 6px; }
-    h2 { margin: 0 0 10px; font-size: 15px; }
-    table { width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid #eeeeee; border-radius: 10px; overflow: hidden; }
-    th { background: #111111; color: #ffffff; text-align: left; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; padding: 10px 12px; }
-    td { border-top: 1px solid #eeeeee; padding: 10px 12px; font-size: 12px; vertical-align: top; }
-    tr:nth-child(even) td { background: #fbfbfb; }
-    td:not(:first-child), th:not(:first-child) { text-align: right; }
-    .route-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    .route-card { border: 1px solid #eeeeee; border-radius: 12px; overflow: hidden; background: #ffffff; page-break-inside: avoid; }
-    .route-card-head { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; background: #111111; color: #ffffff; padding: 14px 16px; }
-    .route-card-head h3 { margin: 0; font-size: 15px; }
-    .route-card-head p { margin: 4px 0 0; color: #d1d5db; font-size: 11px; }
-    .route-card-head strong { color: #ffffff; font-family: Consolas, 'Courier New', monospace; font-size: 18px; }
-    .receiver-block { padding: 12px 14px 14px; border-top: 1px solid #eeeeee; }
-    .receiver-title { margin-bottom: 8px; color: #6b7280; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
-    .receiver-title span { color: #e8231a; }
-    .route th { background: #f4f4f5; color: #444444; }
-    .route td:first-child, .route th:first-child { text-align: left; }
-    .footer { padding: 18px 28px 26px; color: #8a8a8a; font-size: 11px; }
-    @media print { body { background: #ffffff; } .page { padding: 0; } .hero { box-shadow: none; border-radius: 0; } }
-    @media (max-width: 800px) { .header, .summary, .route-grid { grid-template-columns: 1fr; display: block; } .metric, .route-card { margin-top: 10px; } .meta { text-align: left; margin-top: 14px; } }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 28px; border-bottom: 1px solid #eeeeee; }
+    .brand { display: flex; align-items: center; gap: 16px; }
+    .logo { max-width: 150px; max-height: 56px; object-fit: contain; }
+    h1 { margin: 0; font-size: 20px; }
+    .subtitle { margin: 4px 0 0; color: #6b7280; font-size: 12px; }
+    .meta { text-align: right; color: #6b7280; font-size: 11px; line-height: 1.8; white-space: nowrap; }
+    .section { padding: 22px 28px 28px; }
+    h2 { margin: 0 0 14px; font-size: 14px; color: #111; }
+    .pivot-wrap { overflow-x: auto; }
+    .pivot { border-collapse: collapse; background: #ffffff; font-size: 12px; width: 100%; }
+    .pivot thead tr:first-child th { background: #111111; color: #ffffff; text-align: center; padding: 10px 14px; font-size: 11px; letter-spacing: .03em; border-left: 2px solid #555; white-space: nowrap; }
+    .pivot thead tr:first-child th:first-child { text-align: left; border-left: none; }
+    .pivot-unit { font-weight: 400; color: #9ca3af; font-size: 10px; }
+    .pivot-item-head { background: #1c1c1c; }
+    .pivot-in   { background: #1a2e1a; color: #4ade80; text-align: center; padding: 6px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; border-left: 2px solid #555; }
+    .pivot-out  { background: #2e1a1a; color: #e8231a; text-align: center; padding: 6px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; border-left: 1px solid #3a1a1a; }
+    .pivot-diff { background: #1a1a2e; color: #818cf8; text-align: center; padding: 6px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; border-left: 1px solid #252538; }
+    .pivot-branch { padding: 10px 16px; font-weight: 600; color: #111111; border-top: 2px solid #d0d0d0; border-right: 2px solid #cccccc; white-space: nowrap; min-width: 140px; }
+    .pivot-cell { text-align: center; padding: 10px 12px; border-top: 2px solid #d0d0d0; border-left: 1px solid #eeeeee; min-width: 60px; }
+    .pivot-cell:nth-child(3n+2) { border-left: 2px solid #cccccc; }
+    .val-in    { font-family: Consolas, 'Courier New', monospace; font-weight: 700; color: #16a34a; }
+    .val-out   { font-family: Consolas, 'Courier New', monospace; font-weight: 700; color: #e8231a; }
+    .val-empty { color: #dddddd; }
+    tr.alt td  { background: #f7f7f7; }
+    .footer { padding: 14px 28px 22px; color: #9ca3af; font-size: 11px; border-top: 1px solid #eeeeee; }
+    @media print { body { background: #fff; } .page { padding: 0; } .hero { box-shadow: none; border-radius: 0; } }
   </style>
 </head>
 <body>
@@ -425,40 +404,36 @@ export default function ReportPage() {
         <div class="brand">
           ${logoDataUrl ? `<img class="logo" src="${logoDataUrl}" alt="Ahmad Al Abdalla" />` : ''}
           <div>
-            <h1>Quantity Report</h1>
-            <p class="subtitle">Branch movement, item routes, and monthly quantity totals</p>
+            <h1>Item Movement by Branch</h1>
+            <p class="subtitle">In / Out / Diff per item per branch</p>
           </div>
         </div>
         <div class="meta">
           <div>Generated: ${htmlEscape(generatedAt)}</div>
-          <div>Range: ${htmlEscape(filterLabel)}</div>
+          <div>Period: ${htmlEscape(filterLabel)}</div>
           <div>Status: ${htmlEscape(statusFilter === 'all' ? 'All statuses' : statusFilter.replaceAll('_', ' '))}</div>
         </div>
       </div>
-      <div class="summary">
-        <div class="metric"><span>Total Sent</span><strong>${htmlEscape(formatQty(summary.sent))}</strong></div>
-        <div class="metric"><span>Total Received</span><strong>${htmlEscape(formatQty(summary.received))}</strong></div>
-        <div class="metric"><span>This Month Movement</span><strong>${htmlEscape(formatQty(monthlySummary.totalMovement))}</strong></div>
-        <div class="metric"><span>Pending Qty</span><strong>${htmlEscape(formatQty(summary.pending))}</strong></div>
-      </div>
       <div class="section">
-        <h2>Branch Summary</h2>
-        <table>
-          <thead><tr><th>Branch</th><th>Transfers</th><th>Total Movement</th><th>Outgoing Sent</th><th>Incoming Received</th><th>Pending Incoming</th></tr></thead>
-          <tbody>${branchRowsHtml || '<tr><td colspan="6">No branch data.</td></tr>'}</tbody>
-        </table>
+        <h2>Item Movement by Branch</h2>
+        ${pivotData.rows.length > 0 ? `
+        <div class="pivot-wrap">
+          <table class="pivot">
+            <thead>
+              <tr><th rowspan="2">Branch</th>${pivotItemHeadersHtml}</tr>
+              <tr>${pivotSubHeaderHtml}</tr>
+            </thead>
+            <tbody>${pivotRowsHtml || '<tr><td colspan="100">No data.</td></tr>'}</tbody>
+          </table>
+        </div>` : '<p style="color:#888;font-size:12px">No item movement.</p>'}
       </div>
-      <div class="section">
-        <h2>Items From / To Branches</h2>
-        ${routeGroupsHtml ? `<div class="route-grid">${routeGroupsHtml}</div>` : '<table><tbody><tr><td>No item movement.</td></tr></tbody></table>'}
-      </div>
-      <div class="footer">Ahmad Al Abdalla internal transfer report.</div>
+      <div class="footer">Ahmad Al Abdalla — internal transfer report</div>
     </div>
   </div>
 </body>
 </html>`
 
-    downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8;' }), `quantity-report-${dateInputValue(new Date())}.html`)
+    downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8;' }), `item-movement-${dateInputValue(new Date())}.html`)
   }
 
   return (
@@ -541,92 +516,83 @@ export default function ReportPage() {
             </div>
           </Card>
 
-          <div className="space-y-4">
-            <div>
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between mb-3">
-                <div>
-                  <h2 className="text-sm font-medium text-[#111111]">This Month</h2>
-                  <p className="text-xs text-[#888888] mt-0.5">
-                    Current calendar month totals, independent from the selected report filters.
-                  </p>
-                </div>
-                <p className="text-xs text-[#888888]">
-                  {formatQty(monthlySummary.transferCount)} transfer{monthlySummary.transferCount === 1 ? '' : 's'}
-                </p>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-                <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Total Movement" value={formatQty(monthlySummary.totalMovement)} compact />
-                <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Qty Sent" value={formatQty(monthlySummary.sent)} compact />
-                <SummaryCard icon={<CheckCircle className="h-4 w-4 text-green-400" />} label="Qty Received" value={formatQty(monthlySummary.received)} color="green" compact />
-                <SummaryCard icon={<Clock className="h-4 w-4" />} label="Pending Qty" value={formatQty(monthlySummary.pending)} compact />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <SummaryCard icon={<TrendingUp className="h-4 w-4" />} label="Qty Sent" value={formatQty(summary.sent)} />
-              <SummaryCard icon={<CheckCircle className="h-4 w-4 text-green-400" />} label="Qty Received" value={formatQty(summary.received)} color="green" />
-              <SummaryCard icon={<Clock className="h-4 w-4" />} label="Pending Qty" value={formatQty(summary.pending)} compact />
-            </div>
-          </div>
-
           <div>
             <SectionHeading
-              title="Per Branch"
-              description="A 4-column operational view of incoming, outgoing, pending, and total movement."
+              title="Item Movement by Branch"
+              description="Each branch as a row, each item as a column — spot in/out quantities at a glance."
             />
-            {branchStats.length === 0 ? (
-              <Card className="px-6 py-8 text-center text-sm text-[#444444]">No branch data matches the selected filters.</Card>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                {branchStats.map(branch => (
-                  <BranchReportCard key={branch.id} branch={branch} />
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <SectionHeading
-              title="Items From / To Branches"
-              description="One unified view of every item sent from each branch to each destination in the selected report filters."
-            />
-            {routeItemRows.length === 0 ? (
+            {pivotData.rows.length === 0 ? (
               <Card className="px-6 py-8 text-center text-sm text-[#444444]">No item movement matches the selected filters.</Card>
             ) : (
               <Card className="overflow-hidden bg-white shadow-sm">
-                <div className="border-b border-[#F0F0F0] bg-[#FAFAFA] px-4 py-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-[#888888]">
-                    {formatQty(routeItemRows.length)} item route{routeItemRows.length === 1 ? '' : 's'}
-                  </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr>
+                        <th
+                          rowSpan={2}
+                          className="sticky left-0 z-10 bg-[#111111] text-white text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider border-r-2 border-r-[#555] min-w-[140px]"
+                        >
+                          Branch
+                        </th>
+                        {visibleItems.map(item => (
+                          <th
+                            key={item.id}
+                            colSpan={3}
+                            className="bg-[#1C1C1C] text-white text-center px-3 py-2 text-xs font-semibold border-l-2 border-l-[#555] whitespace-nowrap"
+                            dir="auto"
+                          >
+                            {item.name}
+                            {item.unit ? <span className="ml-1 text-[#9CA3AF] font-normal">({item.unit})</span> : null}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr>
+                        {visibleItems.map(item => (
+                          <React.Fragment key={item.id}>
+                            <th className="bg-[#1a2e1a] text-green-400 text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l-2 border-l-[#555] w-[64px]">in</th>
+                            <th className="bg-[#2e1a1a] text-[#E8231A] text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l border-l-[#3a1a1a] w-[64px]">out</th>
+                            <th className="bg-[#1a1a2e] text-[#818CF8] text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l border-l-[#252538] w-[64px]">diff</th>
+                          </React.Fragment>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pivotData.rows.map((row, rowIdx) => (
+                        <tr key={row.branchId} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-[#F7F7F7]'}>
+                          <td className="sticky left-0 z-10 px-4 py-3 font-semibold text-[#111111] border-r-2 border-r-[#CCCCCC] border-t-2 border-t-[#D0D0D0] bg-inherit" dir="auto">
+                            {row.branchName}
+                          </td>
+                          {visibleItems.map(item => {
+                            const cell = row.cells.get(item.id)
+                            const diff = cell ? cell.in - cell.out : 0
+                            return (
+                              <React.Fragment key={item.id}>
+                                <td className="text-center px-3 py-3 border-l-2 border-l-[#CCCCCC] border-t-2 border-t-[#D0D0D0] font-mono text-sm tabular-nums">
+                                  {cell && cell.in > 0
+                                    ? <span className="font-semibold text-green-600">{formatQty(cell.in)}</span>
+                                    : <span className="text-[#DDDDDD]">—</span>}
+                                </td>
+                                <td className="text-center px-3 py-3 border-l border-l-[#E8E8E8] border-t-2 border-t-[#D0D0D0] font-mono text-sm tabular-nums">
+                                  {cell && cell.out > 0
+                                    ? <span className="font-semibold text-[#E8231A]">{formatQty(cell.out)}</span>
+                                    : <span className="text-[#DDDDDD]">—</span>}
+                                </td>
+                                <td className="text-center px-3 py-3 border-l border-l-[#E0E0F0] border-t-2 border-t-[#D0D0D0] font-mono text-sm tabular-nums">
+                                  {diff === 0
+                                    ? <span className="text-[#DDDDDD]">—</span>
+                                    : diff > 0
+                                      ? <span className="font-semibold text-green-600">+{formatQty(diff)}</span>
+                                      : <span className="font-semibold text-[#E8231A]">{formatQty(diff)}</span>}
+                                </td>
+                              </React.Fragment>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-[#111111] hover:bg-[#111111]">
-                      <TableHead className="text-white">From Branch</TableHead>
-                      <TableHead className="text-white">To Branch</TableHead>
-                      <TableHead className="text-white">Item</TableHead>
-                      <TableHead className="text-white">Unit</TableHead>
-                      <TableHead className="text-right text-white">Qty Sent</TableHead>
-                      <TableHead className="text-right text-white">Lines</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {routeItemRows.map(row => (
-                      <TableRow key={row.id}>
-                        <TableCell className="font-medium" dir="auto">{row.senderBranchName}</TableCell>
-                        <TableCell dir="auto">{row.receiverBranchName}</TableCell>
-                        <TableCell dir="auto">{row.itemName}</TableCell>
-                        <TableCell className="text-[#888888]">{row.unit || '-'}</TableCell>
-                        <TableCell className="text-right font-mono text-xs font-semibold tabular text-[#E8231A]">
-                          {formatQty(row.quantitySent)}
-                        </TableCell>
-                        <TableCell className="text-right font-mono text-xs tabular text-[#444444]">
-                          {formatQty(row.transferCount)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
               </Card>
             )}
           </div>
@@ -638,6 +604,41 @@ export default function ReportPage() {
 
 function branchName(branches: Branch[], id: string) {
   return branches.find(branch => branch.id === id)?.name ?? 'Unknown branch'
+}
+
+function buildPivotTable(branches: Branch[], transfers: TransferRow[]): PivotData {
+  const itemMap = new Map<string, PivotItem>()
+  const cellMap = new Map<string, Map<string, PivotCell>>()
+
+  for (const transfer of transfers) {
+    for (const line of transfer.transfer_lines) {
+      if (line.item && !itemMap.has(line.item_id)) {
+        itemMap.set(line.item_id, { id: line.item_id, name: line.item.name, unit: line.item.unit ?? '' })
+      }
+
+      const qty = Number(line.quantity_sent)
+
+      const senderCells = cellMap.get(transfer.sender_branch_id) ?? new Map<string, PivotCell>()
+      const senderCell = senderCells.get(line.item_id) ?? { in: 0, out: 0 }
+      senderCell.out += qty
+      senderCells.set(line.item_id, senderCell)
+      cellMap.set(transfer.sender_branch_id, senderCells)
+
+      const receiverCells = cellMap.get(transfer.receiver_branch_id) ?? new Map<string, PivotCell>()
+      const receiverCell = receiverCells.get(line.item_id) ?? { in: 0, out: 0 }
+      receiverCell.in += qty
+      receiverCells.set(line.item_id, receiverCell)
+      cellMap.set(transfer.receiver_branch_id, receiverCells)
+    }
+  }
+
+  const items = Array.from(itemMap.values()).sort((a, b) => a.name.localeCompare(b.name))
+  const rows = branches
+    .filter(branch => cellMap.has(branch.id))
+    .map(branch => ({ branchId: branch.id, branchName: branch.name, cells: cellMap.get(branch.id)! }))
+    .sort((a, b) => a.branchName.localeCompare(b.branchName))
+
+  return { items, rows }
 }
 
 function buildBranchStats(branches: Branch[], transfers: TransferRow[]): BranchStat[] {
