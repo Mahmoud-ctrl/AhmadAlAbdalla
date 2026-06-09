@@ -8,6 +8,16 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
+function passwordErrorMessage(message: string) {
+  const lower = message.toLowerCase()
+
+  if (lower.includes('aal2') || lower.includes('mfa')) {
+    return 'Verify with Google Authenticator first, then set the new password.'
+  }
+
+  return message
+}
+
 export default function PasswordPage() {
   const router = useRouter()
   const [password, setPassword] = useState('')
@@ -35,7 +45,7 @@ export default function PasswordPage() {
 
     if (passwordError) {
       setLoading(false)
-      setError(passwordError.message)
+      setError(passwordErrorMessage(passwordError.message))
       return
     }
 

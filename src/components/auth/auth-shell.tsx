@@ -64,7 +64,23 @@ export function AuthShell({ children }: { children: ReactNode }) {
         return
       }
 
+      const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+      const hasAal2 = !aalError && aal.currentLevel === 'aal2'
+
       if (profile.must_change_password) {
+        const factors = await supabase.auth.mfa.listFactors()
+        const hasVerifiedMfa = factors.data?.totp.some(factor => factor.status === 'verified') ?? false
+
+        if ((factors.error || hasVerifiedMfa) && !hasAal2) {
+          if (pathname !== '/mfa') {
+            router.replace('/mfa')
+            return
+          }
+
+          if (!cancelled) setState('auth-route')
+          return
+        }
+
         if (pathname !== '/password') {
           router.replace('/password')
           return
@@ -79,9 +95,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
         return
       }
 
-      const { data: aal, error: aalError } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
-
-      if (aalError || aal.currentLevel !== 'aal2') {
+      if (!hasAal2) {
         if (pathname !== '/mfa') {
           router.replace('/mfa')
           return
