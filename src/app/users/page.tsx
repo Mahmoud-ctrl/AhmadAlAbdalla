@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Ban, CheckCircle, KeyRound, Plus, ShieldCheck, ShieldX, UserCog } from 'lucide-react'
+import { Ban, CheckCircle, KeyRound, Plus, ShieldCheck, UserCog } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { AppRole } from '@/types'
 import { Badge } from '@/components/ui/badge'
@@ -183,21 +183,6 @@ export default function UsersPage() {
     }
   }
 
-  async function clearMfa(user: AdminUser) {
-    try {
-      const result = await adminFetch<{ cleared: number }>('/api/admin/users', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          id: user.id,
-          action: 'clear_mfa',
-        }),
-      })
-      toast.success(result.cleared > 0 ? 'MFA factors cleared' : 'No MFA factors to clear')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not clear MFA factors.')
-    }
-  }
-
   return (
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-6xl">
       <div className="flex items-center justify-between mb-6">
@@ -261,10 +246,6 @@ export default function UsersPage() {
                 <Button variant="outline" size="sm" onClick={() => { setResetTarget(user); setResetPassword('') }}>
                   <KeyRound className="h-3.5 w-3.5" />
                   Reset Password
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => clearMfa(user)}>
-                  <ShieldX className="h-3.5 w-3.5" />
-                  Clear MFA
                 </Button>
                 {user.active ? (
                   <Button variant="destructive" size="sm" onClick={() => setActive(user, false)}>

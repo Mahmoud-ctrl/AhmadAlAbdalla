@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { adminAuthErrorResponse, requireSuperAdmin } from '@/lib/admin-auth'
-import { clearAppUserMfaFactors, createAppUser, resetAppUserPassword } from '@/lib/user-admin'
+import { createAppUser, resetAppUserPassword } from '@/lib/user-admin'
 import { getSupabaseAdmin } from '@/lib/supabase-admin'
 import type { AppRole } from '@/types'
 
@@ -17,7 +17,7 @@ type CreateUserBody = {
 
 type PatchUserBody = {
   id?: string
-  action?: 'set_active' | 'reset_password' | 'clear_mfa'
+  action?: 'set_active' | 'reset_password'
   active?: boolean
   temporaryPassword?: string
 }
@@ -90,11 +90,6 @@ export async function PATCH(request: Request) {
     if (body.action === 'reset_password') {
       await resetAppUserPassword(body.id, body.temporaryPassword ?? '')
       return NextResponse.json({ ok: true })
-    }
-
-    if (body.action === 'clear_mfa') {
-      const cleared = await clearAppUserMfaFactors(body.id)
-      return NextResponse.json({ ok: true, cleared })
     }
 
     if (body.action === 'set_active') {

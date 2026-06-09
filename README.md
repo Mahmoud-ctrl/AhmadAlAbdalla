@@ -33,8 +33,6 @@ username -> username@alabdallah.internal
 
 New users can be required to change their temporary password before continuing.
 
-Google Authenticator / TOTP MFA is required before normal app access. The app checks Supabase authenticator assurance level `aal2`, and the database policies also use the JWT `aal` claim for protected data access.
-
 ## Security Model
 
 The UI redirects users away from unauthorized pages, but the database is the source of truth.
@@ -43,13 +41,12 @@ Security is enforced with:
 
 - Supabase Auth sessions.
 - Active user profiles.
-- Required MFA.
 - Role checks for super-admin actions.
 - Supabase Row Level Security on protected tables.
 - Database RPC functions for transfer workflows.
 - Server-only Supabase service-role usage for admin user management.
 
-Branch and item data can be read by active MFA-verified users. Creating, editing, or deleting branches/items requires an active MFA-verified super admin.
+Branch and item data can be read by active users. Creating, editing, or deleting branches/items requires an active super admin.
 
 Transfers are branch-scoped. A branch manager can read transfers where their assigned branch is the sender or receiver. Super admins can read and resolve all transfers.
 
@@ -69,7 +66,7 @@ Core transfer operations are implemented as Supabase RPC functions:
 - `receive_transfer`
 - `admin_resolve_transfer`
 
-These functions validate active login, MFA, role, branch scope, quantities, and status transitions.
+These functions validate active login, role, branch scope, quantities, and status transitions.
 
 ## First-Time Setup
 
@@ -108,4 +105,4 @@ npm run lint
 
 The migrations in `supabase/migrations` define user profiles, transfer tables, RPC functions, and RLS policies.
 
-For live Supabase projects, keep RLS enabled and verify that branch/item mutation policies allow only active MFA-verified super admins.
+For live Supabase projects, keep RLS enabled and verify that branch/item mutation policies allow only active super admins.

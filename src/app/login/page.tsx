@@ -24,7 +24,7 @@ export default function LoginPage() {
       setError('This account is not active or has no manager profile.')
     }
     if (params.get('setup') === 'complete') {
-      setNotice('Super admin created. Log in to set up Google Authenticator.')
+      setNotice('Super admin created. Log in to continue.')
     }
   }, [])
 

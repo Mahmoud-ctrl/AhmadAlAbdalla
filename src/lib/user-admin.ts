@@ -166,27 +166,3 @@ export async function resetAppUserPassword(userId: string, temporaryPassword: st
     throw new Error(profileError.message)
   }
 }
-
-export async function clearAppUserMfaFactors(userId: string) {
-  const supabaseAdmin = getSupabaseAdmin()
-  const { data, error } = await supabaseAdmin.auth.admin.mfa.listFactors({ userId })
-
-  if (error) {
-    throw new Error(error.message)
-  }
-
-  const factors = data.factors ?? []
-
-  for (const factor of factors) {
-    const { error: deleteError } = await supabaseAdmin.auth.admin.mfa.deleteFactor({
-      userId,
-      id: factor.id,
-    })
-
-    if (deleteError) {
-      throw new Error(deleteError.message)
-    }
-  }
-
-  return factors.length
-}

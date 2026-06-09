@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer'
 import { NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase-admin'
 
@@ -27,26 +26,8 @@ function getBearerToken(request: Request) {
   return token
 }
 
-function readJwtClaims(accessToken: string) {
-  const [, payload] = accessToken.split('.')
-
-  if (!payload) {
-    throw new AdminAuthError('Invalid authorization token.', 401)
-  }
-
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
-    aal?: string
-  }
-}
-
 export async function requireSuperAdmin(request: Request): Promise<AdminActor> {
   const accessToken = getBearerToken(request)
-  const claims = readJwtClaims(accessToken)
-
-  if (claims.aal !== 'aal2') {
-    throw new AdminAuthError('Google Authenticator verification is required.', 403)
-  }
-
   const supabaseAdmin = getSupabaseAdmin()
   const { data: userResult, error: userError } = await supabaseAdmin.auth.getUser(accessToken)
 

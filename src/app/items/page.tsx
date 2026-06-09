@@ -32,7 +32,7 @@ function isPermissionError(error: DbError) {
 
 function itemMutationError(error: DbError) {
   if (isPermissionError(error)) {
-    return 'Super admin access with MFA is required.'
+    return 'Super admin access is required.'
   }
 
   return error.message
@@ -62,12 +62,12 @@ export default function ItemsPage() {
   const isSuperAdmin = profile?.role === 'super_admin'
 
   function openAdd() {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     setEditing(null); setSelectedSuggestion(null); setName(''); setUnit(''); setPrice(''); setDialogOpen(true)
   }
 
   function openEdit(item: Item) {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     setEditing(item); setSelectedSuggestion(item); setName(item.name); setUnit(item.unit)
     setPrice(String(item.price_per_unit)); setDialogOpen(true)
   }
@@ -79,7 +79,7 @@ export default function ItemsPage() {
   }
 
   async function save() {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     if (!name.trim()) { toast.error('Item name is required'); return }
     if (!unit.trim()) { toast.error('Unit is required'); return }
     const priceNum = parseFloat(price)
@@ -100,7 +100,7 @@ export default function ItemsPage() {
   }
 
   async function confirmDelete(item: Item) {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     const { error } = await supabase.from('items').delete().eq('id', item.id)
     if (error) {
       toast.error(error.code === '23503' ? 'Cannot delete - item has transfers' : itemMutationError(error))
@@ -132,9 +132,9 @@ export default function ItemsPage() {
         <div className="py-16 text-center text-sm text-[#444444]">Loading…</div>
       ) : !isSuperAdmin ? (
         <Card className="p-5 bg-white">
-          <p className="text-sm font-medium text-[#111111]">Super admin access with MFA is required.</p>
+          <p className="text-sm font-medium text-[#111111]">Super admin access is required.</p>
           <p className="mt-1 text-sm text-[#888888]">
-            Item management is protected by Supabase row level security and is only available to verified super admins.
+            Item management is protected by Supabase row level security and is only available to super admins.
           </p>
         </Card>
       ) : items.length === 0 ? (

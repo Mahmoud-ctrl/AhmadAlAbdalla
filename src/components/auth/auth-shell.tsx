@@ -11,8 +11,6 @@ type ShellState = 'checking' | 'auth-route' | 'ready'
 
 type CachedAuth = {
   profile: AppProfile & { active: boolean; must_change_password: boolean }
-  hasAal2: boolean
-  requiresMfaFlow: boolean
 }
 
 const adminOnlyRoutes = ['/branches', '/items', '/users']
@@ -43,28 +41,17 @@ export function AuthShell({ children }: { children: ReactNode }) {
       return
     }
 
-    const { profile, hasAal2, requiresMfaFlow } = auth
+    const { profile } = auth
 
     if (setupRoute) { setState('auth-route'); return }
     if (loginRoute) { router.replace('/'); return }
 
     if (profile.must_change_password) {
-      if (requiresMfaFlow && !hasAal2) {
-        if (path !== '/mfa') { router.replace('/mfa'); return }
-        setState('auth-route'); return
-      }
       if (path !== '/password') { router.replace('/password'); return }
       setState('auth-route'); return
     }
 
-    if (path === '/password') { router.replace('/mfa'); return }
-
-    if (!hasAal2) {
-      if (path !== '/mfa') { router.replace('/mfa'); return }
-      setState('auth-route'); return
-    }
-
-    if (path === '/mfa') { router.replace('/'); return }
+    if (path === '/password') { router.replace('/'); return }
 
     if (isAdminOnlyRoute(path) && profile.role !== 'super_admin') {
       router.replace('/'); return
@@ -92,14 +79,11 @@ export function AuthShell({ children }: { children: ReactNode }) {
         return
       }
 
-      const [profileResult, aalResult] = await Promise.all([
-        supabase
-          .from('user_profiles')
-          .select('id, active, must_change_password, role, branch_id, username, full_name, branch:branches(id,name)')
-          .eq('id', session.user.id)
-          .maybeSingle(),
-        supabase.auth.mfa.getAuthenticatorAssuranceLevel(),
-      ])
+      const profileResult = await supabase
+        .from('user_profiles')
+        .select('id, active, must_change_password, role, branch_id, username, full_name, branch:branches(id,name)')
+        .eq('id', session.user.id)
+        .maybeSingle()
 
       if (cancelled) return
 
@@ -111,17 +95,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
         return
       }
 
-      const hasAal2 = !aalResult.error && aalResult.data?.currentLevel === 'aal2'
-
-      let requiresMfaFlow = false
-      if (rawProfile.must_change_password && !hasAal2) {
-        const factors = await supabase.auth.mfa.listFactors()
-        if (cancelled) return
-        const hasVerifiedMfa = factors.data?.totp.some(f => f.status === 'verified') ?? false
-        requiresMfaFlow = factors.error ? true : hasVerifiedMfa
-      }
-
-      const cached: CachedAuth = { profile: rawProfile, hasAal2, requiresMfaFlow }
+      const cached: CachedAuth = { profile: rawProfile }
       authRef.current = cached
 
       setAppProfile({

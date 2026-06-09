@@ -35,7 +35,7 @@ function isPermissionError(error: DbError) {
 
 function branchMutationError(error: DbError) {
   if (isPermissionError(error)) {
-    return 'Super admin access with MFA is required.'
+    return 'Super admin access is required.'
   }
 
   return error.message
@@ -88,17 +88,17 @@ export default function BranchesPage() {
   const isSuperAdmin = profile?.role === 'super_admin'
 
   function openAdd() {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     setEditing(null); setName(''); setLocation(''); setDialogOpen(true)
   }
 
   function openEdit(b: Branch) {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     setEditing(b); setName(b.name); setLocation(b.location ?? ''); setDialogOpen(true)
   }
 
   async function save() {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     if (!name.trim()) { toast.error('Branch name is required'); return }
     setSaving(true)
     const payload = { name: name.trim(), location: location.trim() || null }
@@ -115,7 +115,7 @@ export default function BranchesPage() {
   }
 
   async function confirmDelete(b: Branch) {
-    if (!isSuperAdmin) { toast.error('Super admin access with MFA is required.'); return }
+    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
     const { error } = await supabase.from('branches').delete().eq('id', b.id)
     if (error) {
       toast.error(error.code === '23503' ? 'Cannot delete - branch has transfers' : branchMutationError(error))
@@ -147,9 +147,9 @@ export default function BranchesPage() {
         <div className="py-16 text-center text-sm text-[#444444]">Loading…</div>
       ) : !isSuperAdmin ? (
         <Card className="p-5 bg-white">
-          <p className="text-sm font-medium text-[#111111]">Super admin access with MFA is required.</p>
+          <p className="text-sm font-medium text-[#111111]">Super admin access is required.</p>
           <p className="mt-1 text-sm text-[#888888]">
-            Branch management is protected by Supabase row level security and is only available to verified super admins.
+            Branch management is protected by Supabase row level security and is only available to super admins.
           </p>
         </Card>
       ) : branches.length === 0 ? (

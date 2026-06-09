@@ -75,14 +75,6 @@ execute function public.set_updated_at();
 
 create schema if not exists private;
 
-create or replace function private.has_mfa()
-returns boolean
-language sql
-stable
-as $$
-  select coalesce((select auth.jwt() ->> 'aal') = 'aal2', false);
-$$;
-
 create or replace function private.is_active_user()
 returns boolean
 language sql
@@ -166,10 +158,8 @@ on public.user_profiles
 for all
 to authenticated
 using (
-  private.has_mfa()
-  and private.is_super_admin()
+  private.is_super_admin()
 )
 with check (
-  private.has_mfa()
-  and private.is_super_admin()
+  private.is_super_admin()
 );

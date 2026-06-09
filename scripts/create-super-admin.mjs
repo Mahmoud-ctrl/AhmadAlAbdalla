@@ -200,7 +200,7 @@ async function main() {
 
   console.log(`Super admin created: ${input.username} (${input.mobile})`)
   console.log(`Internal auth email: ${authEmail}`)
-  console.log('Next: log in with the username, then enroll Google Authenticator.')
+  console.log('Next: log in with the username.')
 }
 
 main().catch(error => {

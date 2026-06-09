@@ -12,8 +12,6 @@ Required Supabase dashboard settings:
 - Phone provider is not needed.
 - Mobile number is profile/contact data only.
 - Do not enable SMS OTP login for managers.
-- Do not enable Supabase Phone MFA.
-- Require TOTP MFA in the app flow, shown to users as Google Authenticator.
 
 First-time setup:
 

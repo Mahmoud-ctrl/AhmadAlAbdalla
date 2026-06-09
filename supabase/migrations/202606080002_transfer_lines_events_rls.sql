@@ -1,4 +1,4 @@
--- Phase 2: branch movement transfers with line items, events, and aal2 RLS.
+-- Phase 2: branch movement transfers with line items, events, and RLS.
 
 create extension if not exists pgcrypto;
 
@@ -252,8 +252,7 @@ stable
 security definer
 set search_path = public
 as $$
-  select private.has_mfa()
-    and private.is_active_user()
+  select private.is_active_user()
     and (
       private.is_super_admin()
       or transfer_row.sender_branch_id = private.current_branch_id()
@@ -284,8 +283,8 @@ declare
   line_quantity numeric;
   line_price numeric;
 begin
-  if actor is null or not private.has_mfa() or not private.is_active_user() then
-    raise exception 'Verified active login is required.';
+  if actor is null or not private.is_active_user() then
+    raise exception 'Active login is required.';
   end if;
 
   sender_branch := private.current_branch_id();
@@ -393,8 +392,8 @@ declare
   mismatch_count int;
   new_status public.transfer_status;
 begin
-  if actor is null or not private.has_mfa() or not private.is_active_user() then
-    raise exception 'Verified active login is required.';
+  if actor is null or not private.is_active_user() then
+    raise exception 'Active login is required.';
   end if;
 
   select * into target
@@ -488,8 +487,8 @@ as $$
 declare
   actor uuid := auth.uid();
 begin
-  if actor is null or not private.has_mfa() or not private.is_super_admin() then
-    raise exception 'Super admin verification is required.';
+  if actor is null or not private.is_super_admin() then
+    raise exception 'Super admin access is required.';
   end if;
 
   if p_status not in ('admin_resolved', 'cancelled', 'confirmed') then
@@ -533,24 +532,26 @@ alter table public.transfer_lines enable row level security;
 alter table public.transfer_events enable row level security;
 
 drop policy if exists "Verified users read branches" on public.branches;
+drop policy if exists "Active users read branches" on public.branches;
 drop policy if exists "Super admins manage branches" on public.branches;
-create policy "Verified users read branches"
+create policy "Active users read branches"
 on public.branches for select to authenticated
-using (private.has_mfa() and private.is_active_user());
+using (private.is_active_user());
 create policy "Super admins manage branches"
 on public.branches for all to authenticated
-using (private.has_mfa() and private.is_super_admin())
-with check (private.has_mfa() and private.is_super_admin());
+using (private.is_super_admin())
+with check (private.is_super_admin());
 
 drop policy if exists "Verified users read items" on public.items;
+drop policy if exists "Active users read items" on public.items;
 drop policy if exists "Super admins manage items" on public.items;
-create policy "Verified users read items"
+create policy "Active users read items"
 on public.items for select to authenticated
-using (private.has_mfa() and private.is_active_user());
+using (private.is_active_user());
 create policy "Super admins manage items"
 on public.items for all to authenticated
-using (private.has_mfa() and private.is_super_admin())
-with check (private.has_mfa() and private.is_super_admin());
+using (private.is_super_admin())
+with check (private.is_super_admin());
 
 drop policy if exists "Users read scoped transfers" on public.transfers;
 drop policy if exists "Super admins manage transfers" on public.transfers;
@@ -559,8 +560,8 @@ on public.transfers for select to authenticated
 using (private.can_read_transfer(transfers));
 create policy "Super admins manage transfers"
 on public.transfers for all to authenticated
-using (private.has_mfa() and private.is_super_admin())
-with check (private.has_mfa() and private.is_super_admin());
+using (private.is_super_admin())
+with check (private.is_super_admin());
 
 drop policy if exists "Users read scoped transfer lines" on public.transfer_lines;
 drop policy if exists "Super admins manage transfer lines" on public.transfer_lines;
@@ -576,8 +577,8 @@ using (
 );
 create policy "Super admins manage transfer lines"
 on public.transfer_lines for all to authenticated
-using (private.has_mfa() and private.is_super_admin())
-with check (private.has_mfa() and private.is_super_admin());
+using (private.is_super_admin())
+with check (private.is_super_admin());
 
 drop policy if exists "Users read scoped transfer events" on public.transfer_events;
 drop policy if exists "Super admins manage transfer events" on public.transfer_events;
@@ -593,5 +594,5 @@ using (
 );
 create policy "Super admins manage transfer events"
 on public.transfer_events for all to authenticated
-using (private.has_mfa() and private.is_super_admin())
-with check (private.has_mfa() and private.is_super_admin());
+using (private.is_super_admin())
+with check (private.is_super_admin());
