@@ -42,7 +42,7 @@ type ReceiverRouteGroup = {
 
 type PivotCell = { in: number; out: number }
 type PivotItem = { id: string; name: string; unit: string }
-type PivotRow = { branchId: string; branchName: string; cells: Map<string, PivotCell> }
+type PivotRow = { branchId: string; branchName: string; direction: 'in' | 'out'; cells: Map<string, PivotCell> }
 type PivotData = { items: PivotItem[]; rows: PivotRow[] }
 
 type DatePreset = 'all' | 'today' | 'week' | 'month' | 'last_month' | 'custom'
@@ -276,13 +276,19 @@ export default function ReportPage() {
       : data
   }, [branches, filteredTransfers, branchFilter, profile])
 
-  // Only show items that have at least one branch with a non-zero net imbalance (in ≠ out).
-  // Perfectly balanced items (all diffs = 0) are excluded entirely — nothing to resolve.
+  // Branches that appear in both an in-row and an out-row need a direction label.
+  const multiBranchIds = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const row of pivotData.rows) counts.set(row.branchId, (counts.get(row.branchId) ?? 0) + 1)
+    return new Set([...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id))
+  }, [pivotData.rows])
+
+  // Only show items that have at least one row with any movement.
   const visibleItems = useMemo(() => {
     return pivotData.items.filter(item =>
       pivotData.rows.some(row => {
         const c = row.cells.get(item.id)
-        return c && c.in !== c.out
+        return c && (c.in > 0 || c.out > 0)
       })
     )
   }, [pivotData])
@@ -341,6 +347,10 @@ export default function ReportPage() {
       `<th class="pivot-in">in</th><th class="pivot-out">out</th><th class="pivot-diff">diff</th>`
     ).join('')
 
+    const exportMultiBranchIds = new Set(
+      pivotData.rows.map(r => r.branchId).filter((id, _, arr) => arr.filter(x => x === id).length > 1)
+    )
+
     const pivotRowsHtml = pivotData.rows.map((row, idx) => {
       const cells = visibleItems.map(item => {
         const cell = row.cells.get(item.id)
@@ -354,7 +364,10 @@ export default function ReportPage() {
             : `<span class="val-out">${htmlEscape(formatQty(diff))}</span>`
         return `<td class="pivot-cell">${inVal}</td><td class="pivot-cell">${outVal}</td><td class="pivot-cell">${diffVal}</td>`
       }).join('')
-      return `<tr class="${idx % 2 === 0 ? '' : 'alt'}"><td class="pivot-branch" dir="auto">${htmlEscape(row.branchName)}</td>${cells}</tr>`
+      const dirLabel = exportMultiBranchIds.has(row.branchId)
+        ? ` <span style="font-size:9px;font-weight:700;color:${row.direction === 'in' ? '#16a34a' : '#e8231a'}">${row.direction === 'in' ? '↓' : '↑'}</span>`
+        : ''
+      return `<tr class="${idx % 2 === 0 ? '' : 'alt'}"><td class="pivot-branch" dir="auto">${htmlEscape(row.branchName)}${dirLabel}</td>${cells}</tr>`
     }).join('')
 
     const html = `<!doctype html>
@@ -559,9 +572,14 @@ export default function ReportPage() {
                     </thead>
                     <tbody>
                       {pivotData.rows.map((row, rowIdx) => (
-                        <tr key={row.branchId} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-[#F7F7F7]'}>
+                        <tr key={`${row.branchId}-${row.direction}`} className={rowIdx % 2 === 0 ? 'bg-white' : 'bg-[#F7F7F7]'}>
                           <td className="sticky left-0 z-10 px-4 py-3 font-semibold text-[#111111] border-r-2 border-r-[#CCCCCC] border-t-2 border-t-[#D0D0D0] bg-inherit" dir="auto">
-                            {row.branchName}
+                            <span>{row.branchName}</span>
+                            {multiBranchIds.has(row.branchId) && (
+                              <span className={`ml-1.5 text-[10px] font-bold uppercase tracking-widest ${row.direction === 'in' ? 'text-green-500' : 'text-[#E8231A]'}`}>
+                                {row.direction === 'in' ? '↓' : '↑'}
+                              </span>
+                            )}
                           </td>
                           {visibleItems.map(item => {
                             const cell = row.cells.get(item.id)
@@ -608,7 +626,9 @@ function branchName(branches: Branch[], id: string) {
 
 function buildPivotTable(branches: Branch[], transfers: TransferRow[]): PivotData {
   const itemMap = new Map<string, PivotItem>()
-  const cellMap = new Map<string, Map<string, PivotCell>>()
+  // Separate maps for incoming and outgoing so each direction becomes its own row.
+  const inMap  = new Map<string, Map<string, PivotCell>>()
+  const outMap = new Map<string, Map<string, PivotCell>>()
 
   for (const transfer of transfers) {
     for (const line of transfer.transfer_lines) {
@@ -616,27 +636,32 @@ function buildPivotTable(branches: Branch[], transfers: TransferRow[]): PivotDat
         itemMap.set(line.item_id, { id: line.item_id, name: line.item.name, unit: line.item.unit ?? '' })
       }
 
-      const qty = Number(line.quantity_sent)
+      const qty    = Number(line.quantity_sent)
+      const itemId = line.item_id
 
-      const senderCells = cellMap.get(transfer.sender_branch_id) ?? new Map<string, PivotCell>()
-      const senderCell = senderCells.get(line.item_id) ?? { in: 0, out: 0 }
+      const senderCells = outMap.get(transfer.sender_branch_id) ?? new Map<string, PivotCell>()
+      const senderCell  = senderCells.get(itemId) ?? { in: 0, out: 0 }
       senderCell.out += qty
-      senderCells.set(line.item_id, senderCell)
-      cellMap.set(transfer.sender_branch_id, senderCells)
+      senderCells.set(itemId, senderCell)
+      outMap.set(transfer.sender_branch_id, senderCells)
 
-      const receiverCells = cellMap.get(transfer.receiver_branch_id) ?? new Map<string, PivotCell>()
-      const receiverCell = receiverCells.get(line.item_id) ?? { in: 0, out: 0 }
+      const receiverCells = inMap.get(transfer.receiver_branch_id) ?? new Map<string, PivotCell>()
+      const receiverCell  = receiverCells.get(itemId) ?? { in: 0, out: 0 }
       receiverCell.in += qty
-      receiverCells.set(line.item_id, receiverCell)
-      cellMap.set(transfer.receiver_branch_id, receiverCells)
+      receiverCells.set(itemId, receiverCell)
+      inMap.set(transfer.receiver_branch_id, receiverCells)
     }
   }
 
   const items = Array.from(itemMap.values()).sort((a, b) => a.name.localeCompare(b.name))
-  const rows = branches
-    .filter(branch => cellMap.has(branch.id))
-    .map(branch => ({ branchId: branch.id, branchName: branch.name, cells: cellMap.get(branch.id)! }))
-    .sort((a, b) => a.branchName.localeCompare(b.branchName))
+  const rows: PivotRow[] = []
+
+  for (const branch of [...branches].sort((a, b) => a.name.localeCompare(b.name))) {
+    const inCells  = inMap.get(branch.id)
+    const outCells = outMap.get(branch.id)
+    if (inCells)  rows.push({ branchId: branch.id, branchName: branch.name, direction: 'in',  cells: inCells })
+    if (outCells) rows.push({ branchId: branch.id, branchName: branch.name, direction: 'out', cells: outCells })
+  }
 
   return { items, rows }
 }

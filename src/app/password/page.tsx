@@ -44,7 +44,7 @@ export default function PasswordPage() {
     setLoading(false)
 
     if (profileError) {
-      setError(profileError.message)
+      setError('Your password was saved, but we could not update your session. Please sign out and sign back in.')
       return
     }
 

@@ -23,34 +23,37 @@ export default function DashboardPage() {
 
   useEffect(() => {
     async function load() {
-      const [
-        { data: allTransfers },
-        { data: recentTransfers },
-        { count: branchCount },
-        { count: itemCount },
-      ] = await Promise.all([
-        supabase.from('transfers').select('status, transfer_lines(quantity_sent, quantity_received, unit_price_snapshot)'),
-        supabase
-          .from('transfers')
-          .select('id, status, sent_at, sender_branch:branches!sender_branch_id(id,name), receiver_branch:branches!receiver_branch_id(id,name), transfer_lines(id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit))')
-          .order('sent_at', { ascending: false })
-          .limit(8),
-        supabase.from('branches').select('*', { count: 'exact', head: true }),
-        supabase.from('items').select('*', { count: 'exact', head: true }),
-      ])
+      try {
+        const [
+          { data: allTransfers },
+          { data: recentTransfers },
+          { count: branchCount },
+          { count: itemCount },
+        ] = await Promise.all([
+          supabase.from('transfers').select('status, transfer_lines(quantity_sent, quantity_received, unit_price_snapshot)'),
+          supabase
+            .from('transfers')
+            .select('id, status, sent_at, sender_branch:branches!sender_branch_id(id,name), receiver_branch:branches!receiver_branch_id(id,name), transfer_lines(id, quantity_sent, quantity_received, unit_price_snapshot, item:items(id,name,unit,price_per_unit))')
+            .order('sent_at', { ascending: false })
+            .limit(8),
+          supabase.from('branches').select('*', { count: 'exact', head: true }),
+          supabase.from('items').select('*', { count: 'exact', head: true }),
+        ])
 
-      const discrepancy = (allTransfers || []).reduce((sum, t) => {
-        const lines = (t.transfer_lines ?? []) as { quantity_sent: number; quantity_received: number | null; unit_price_snapshot: number }[]
-        return sum + lines.reduce((lineSum, line) => (
-          lineSum + Math.abs((Number(line.quantity_sent) - Number(line.quantity_received ?? 0)) * Number(line.unit_price_snapshot))
-        ), 0)
-      }, 0)
+        const discrepancy = (allTransfers || []).reduce((sum, t) => {
+          const lines = (t.transfer_lines ?? []) as { quantity_sent: number; quantity_received: number | null; unit_price_snapshot: number }[]
+          return sum + lines.reduce((lineSum, line) => (
+            lineSum + Math.abs((Number(line.quantity_sent) - Number(line.quantity_received ?? 0)) * Number(line.unit_price_snapshot))
+          ), 0)
+        }, 0)
 
-      const active = (allTransfers || []).filter(t => t.status === 'pending_receipt' || t.status === 'needs_admin_review').length
+        const active = (allTransfers || []).filter(t => t.status === 'pending_receipt' || t.status === 'needs_admin_review').length
 
-      setStats({ discrepancy, active, branches: branchCount ?? 0, items: itemCount ?? 0 })
-      setRecent((recentTransfers as unknown as TransferRow[]) || [])
-      setLoading(false)
+        setStats({ discrepancy, active, branches: branchCount ?? 0, items: itemCount ?? 0 })
+        setRecent((recentTransfers as unknown as TransferRow[]) || [])
+      } finally {
+        setLoading(false)
+      }
     }
     load()
   }, [])
@@ -68,31 +71,6 @@ export default function DashboardPage() {
             New Transfer
           </Button>
         </Link>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard
-          label="Discrepancy Value"
-          value={loading ? '-' : formatCurrency(stats.discrepancy)}
-          icon={<TrendingUp className="h-4 w-4" />}
-          accent
-        />
-        <StatCard
-          label="Pending / Review"
-          value={loading ? '—' : String(stats.active)}
-          icon={<ArrowLeftRight className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Branches"
-          value={loading ? '—' : String(stats.branches)}
-          icon={<Building2 className="h-4 w-4" />}
-        />
-        <StatCard
-          label="Items Tracked"
-          value={loading ? '—' : String(stats.items)}
-          icon={<Package className="h-4 w-4" />}
-        />
       </div>
 
       {/* Recent Transfers */}
@@ -163,23 +141,3 @@ export default function DashboardPage() {
   )
 }
 
-function StatCard({
-  label, value, icon, accent,
-}: {
-  label: string
-  value: string
-  icon: React.ReactNode
-  accent?: boolean
-}) {
-  return (
-    <Card className="p-5">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-xs text-[#888888] uppercase tracking-wider font-medium">{label}</span>
-        <span className={accent ? 'text-[#E8231A]' : 'text-[#444444]'}>{icon}</span>
-      </div>
-      <div className={`text-2xl font-bold font-mono tabular tracking-tight ${accent ? 'text-[#E8231A]' : 'text-[#111111]'}`}>
-        {value}
-      </div>
-    </Card>
-  )
-}

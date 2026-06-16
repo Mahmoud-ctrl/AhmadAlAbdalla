@@ -49,7 +49,18 @@ export default function TransferDetailPage() {
       .eq('id', id)
       .single()
 
-    if (transferResult.error || !transferResult.data) {
+    if (transferResult.error) {
+      if (transferResult.error.code === 'PGRST116') {
+        setNotFound(true)
+      } else {
+        console.error('Failed to load transfer:', transferResult.error.message)
+        setNotFound(true)
+      }
+      setLoading(false)
+      return
+    }
+
+    if (!transferResult.data) {
       setNotFound(true)
       setLoading(false)
       return

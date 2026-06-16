@@ -117,6 +117,7 @@ function validateInput(input) {
 }
 
 async function main() {
+  loadEnvFile(path.resolve(process.cwd(), '.env.local'))
   loadEnvFile(path.resolve(process.cwd(), '.env'))
 
   const args = parseArgs(process.argv.slice(2))
