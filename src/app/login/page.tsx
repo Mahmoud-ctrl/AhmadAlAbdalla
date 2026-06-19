@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { authEmailForUsername } from '@/lib/auth-identity'
+import { useLanguage } from '@/contexts/language-context'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -12,6 +13,7 @@ import { Label } from '@/components/ui/label'
 
 export default function LoginPage() {
   const router = useRouter()
+  const { t } = useLanguage()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -21,11 +23,12 @@ export default function LoginPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     if (params.get('error') === 'unauthorized') {
-      setError('This account is not active or has no manager profile.')
+      setError(t.login.errorInactive)
     }
     if (params.get('setup') === 'complete') {
-      setNotice('Super admin created. Log in to continue.')
+      setNotice(t.login.noticeSetup)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -54,25 +57,25 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm p-6 bg-white">
         <div className="mb-6">
           <Image src="/logo.png" alt="Ahmad Al'Abdalla" width={180} height={64} className="h-12 w-auto object-contain" priority />
-          <h1 className="mt-5 text-xl font-semibold text-[#111111]">Manager Login</h1>
-          <p className="mt-1 text-sm text-[#888888]">Use the username assigned by the super admin.</p>
+          <h1 className="mt-5 text-xl font-semibold text-[#111111]">{t.login.title}</h1>
+          <p className="mt-1 text-sm text-[#888888]">{t.login.subtitle}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <Label htmlFor="username">Username</Label>
+            <Label htmlFor="username">{t.login.username}</Label>
             <Input
               id="username"
               value={username}
               onChange={e => setUsername(e.target.value)}
-              placeholder="super.admin"
+              placeholder={t.login.usernamePlaceholder}
               autoComplete="username"
               required
             />
           </div>
 
           <div>
-            <Label htmlFor="password">Password</Label>
+            <Label htmlFor="password">{t.login.password}</Label>
             <Input
               id="password"
               type="password"
@@ -96,12 +99,12 @@ export default function LoginPage() {
           )}
 
           <Button type="submit" loading={loading} className="w-full" size="lg">
-            Log In
+            {t.login.logIn}
           </Button>
         </form>
 
         <p className="mt-5 text-xs text-[#888888]">
-          Accounts are created by the super admin. There is no manager signup.
+          {t.login.footer}
         </p>
       </Card>
     </div>

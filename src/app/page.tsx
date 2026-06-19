@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -7,7 +7,8 @@ import { TransferRow } from '@/types'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/status-badge'
-import { ArrowRight, TrendingUp, ArrowLeftRight, Building2, Package, Plus } from 'lucide-react'
+import { useLanguage } from '@/contexts/language-context'
+import { ArrowRight, Plus } from 'lucide-react'
 
 type Stats = {
   discrepancy: number
@@ -17,6 +18,7 @@ type Stats = {
 }
 
 export default function DashboardPage() {
+  const { t } = useLanguage()
   const [stats, setStats] = useState<Stats>({ discrepancy: 0, active: 0, branches: 0, items: 0 })
   const [recent, setRecent] = useState<TransferRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -40,14 +42,14 @@ export default function DashboardPage() {
           supabase.from('items').select('*', { count: 'exact', head: true }),
         ])
 
-        const discrepancy = (allTransfers || []).reduce((sum, t) => {
-          const lines = (t.transfer_lines ?? []) as { quantity_sent: number; quantity_received: number | null; unit_price_snapshot: number }[]
+        const discrepancy = (allTransfers || []).reduce((sum, tr) => {
+          const lines = (tr.transfer_lines ?? []) as { quantity_sent: number; quantity_received: number | null; unit_price_snapshot: number }[]
           return sum + lines.reduce((lineSum, line) => (
             lineSum + Math.abs((Number(line.quantity_sent) - Number(line.quantity_received ?? 0)) * Number(line.unit_price_snapshot))
           ), 0)
         }, 0)
 
-        const active = (allTransfers || []).filter(t => t.status === 'pending_receipt' || t.status === 'needs_admin_review').length
+        const active = (allTransfers || []).filter(tr => tr.status === 'pending_receipt' || tr.status === 'needs_admin_review').length
 
         setStats({ discrepancy, active, branches: branchCount ?? 0, items: itemCount ?? 0 })
         setRecent((recentTransfers as unknown as TransferRow[]) || [])
@@ -62,71 +64,70 @@ export default function DashboardPage() {
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-7xl">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Dashboard</h1>
-          <p className="text-sm text-[#888888] mt-0.5">Branch movement and receipt overview</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.dashboard.title}</h1>
+          <p className="text-sm text-[#888888] mt-0.5">{t.dashboard.subtitle}</p>
         </div>
         <Link href="/transfers/new">
           <Button size="md">
             <Plus className="h-4 w-4" />
-            New Transfer
+            {t.dashboard.newTransfer}
           </Button>
         </Link>
       </div>
 
-      {/* Recent Transfers */}
       <Card>
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#E5E5E5]">
-          <h2 className="text-sm font-medium text-[#111111]">Recent Transfers</h2>
+          <h2 className="text-sm font-medium text-[#111111]">{t.dashboard.recentTransfers}</h2>
           <Link href="/transfers">
             <button className="text-xs text-[#888888] hover:text-[#E8231A] transition-colors flex items-center gap-1">
-              View all <ArrowRight className="h-3 w-3" />
+              {t.dashboard.viewAll} <ArrowRight className="h-3 w-3" />
             </button>
           </Link>
         </div>
         {loading ? (
-          <div className="px-6 py-12 text-center text-sm text-[#444444]">Loading...</div>
+          <div className="px-6 py-12 text-center text-sm text-[#444444]">{t.common.loading}</div>
         ) : recent.length === 0 ? (
           <div className="px-6 py-12 text-center">
-            <p className="text-sm text-[#888888]">No transfers yet.</p>
-            <Link href="/transfers/new" className="mt-3 inline-block text-xs text-[#E8231A] hover:underline">Create the first transfer</Link>
+            <p className="text-sm text-[#888888]">{t.dashboard.noTransfers}</p>
+            <Link href="/transfers/new" className="mt-3 inline-block text-xs text-[#E8231A] hover:underline">{t.dashboard.createFirst}</Link>
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4">
-            {recent.map(t => {
-              const transferValue = t.transfer_lines.reduce(
+            {recent.map(transfer => {
+              const transferValue = transfer.transfer_lines.reduce(
                 (sum, line) => sum + Number(line.quantity_sent) * Number(line.unit_price_snapshot),
                 0
               )
-              const discrepancy = t.transfer_lines.reduce(
+              const discrepancy = transfer.transfer_lines.reduce(
                 (sum, line) => sum + Math.abs((Number(line.quantity_sent) - Number(line.quantity_received ?? 0)) * Number(line.unit_price_snapshot)),
                 0
               )
-              const displayValue = t.status === 'needs_admin_review' ? discrepancy : transferValue
+              const displayValue = transfer.status === 'needs_admin_review' ? discrepancy : transferValue
               return (
-                <Link key={t.id} href={`/transfers/${t.id}`}>
+                <Link key={transfer.id} href={`/transfers/${transfer.id}`}>
                   <div className="border border-[#E5E5E5] rounded-xl p-4 bg-white hover:border-[#E8231A]/50 hover:shadow-sm transition-all group cursor-pointer">
                     <div className="flex items-start justify-between mb-3">
-                      <span className="text-xs text-[#9CA3AF] font-mono">{formatDate(t.sent_at)}</span>
-                      <StatusBadge status={t.status} />
+                      <span className="text-xs text-[#9CA3AF] font-mono">{formatDate(transfer.sent_at)}</span>
+                      <StatusBadge status={transfer.status} />
                     </div>
                     <p className="font-semibold text-[#111111] text-sm mb-0.5">
-                      {t.transfer_lines[0]?.item?.name ?? 'Transfer'}
-                      {t.transfer_lines.length > 1 && <span className="ml-1.5 font-normal text-xs text-[#9CA3AF]">+{t.transfer_lines.length - 1} more</span>}
+                      {transfer.transfer_lines[0]?.item?.name ?? 'Transfer'}
+                      {transfer.transfer_lines.length > 1 && <span className="ml-1.5 font-normal text-xs text-[#9CA3AF]">+{transfer.transfer_lines.length - 1} more</span>}
                     </p>
                     <p className="text-xs text-[#6B7280] font-mono mb-3">
-                      {t.transfer_lines.length} line{t.transfer_lines.length === 1 ? '' : 's'} sent
+                      {t.dashboard.lineSent(transfer.transfer_lines.length)}
                     </p>
                     <div className="flex items-center gap-1.5 text-xs mb-4">
-                      <span className="text-[#6B7280]">{t.sender_branch?.name}</span>
+                      <span className="text-[#6B7280]">{transfer.sender_branch?.name}</span>
                       <ArrowRight className="h-3 w-3 text-[#D1D5DB] shrink-0" />
-                      <span className="text-[#111111] font-medium">{t.receiver_branch?.name}</span>
+                      <span className="text-[#111111] font-medium">{transfer.receiver_branch?.name}</span>
                     </div>
                     <div className="flex items-center justify-between pt-3 border-t border-[#F0F0F0]">
-                      <span className={`font-mono text-sm font-semibold ${t.status === 'needs_admin_review' ? 'text-red-500' : 'text-[#111111]'}`}>
+                      <span className={`font-mono text-sm font-semibold ${transfer.status === 'needs_admin_review' ? 'text-red-500' : 'text-[#111111]'}`}>
                         {formatCurrency(displayValue)}
                       </span>
                       <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#E8231A] text-white text-xs font-medium group-hover:bg-[#f03020] transition-colors">
-                        View Transfer
+                        {t.dashboard.viewTransfer}
                         <ArrowRight className="h-3 w-3" />
                       </span>
                     </div>
@@ -140,4 +141,3 @@ export default function DashboardPage() {
     </div>
   )
 }
-

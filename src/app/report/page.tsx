@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { fetchBranches } from '@/lib/data-cache'
 import type { Branch, TransferRow, TransferStatus } from '@/types'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -46,15 +47,6 @@ type PivotRow = { branchId: string; branchName: string; direction: 'in' | 'out';
 type PivotData = { items: PivotItem[]; rows: PivotRow[] }
 
 type DatePreset = 'all' | 'today' | 'week' | 'month' | 'last_month' | 'custom'
-
-const statusOptions: Array<{ value: TransferStatus | 'all'; label: string }> = [
-  { value: 'all', label: 'All Statuses' },
-  { value: 'pending_receipt', label: 'Pending Receipt' },
-  { value: 'confirmed', label: 'Confirmed' },
-  { value: 'needs_admin_review', label: 'Needs Review' },
-  { value: 'admin_resolved', label: 'Admin Resolved' },
-  { value: 'cancelled', label: 'Cancelled' },
-]
 
 function sentQuantity(transfer: TransferRow) {
   return transfer.transfer_lines.reduce((sum, line) => sum + Number(line.quantity_sent), 0)
@@ -181,14 +173,15 @@ function csvRow(values: CsvRow) {
 
 export default function ReportPage() {
   const profile = useAppProfile()
+  const { t } = useLanguage()
 
   const [branches, setBranches] = useState<Branch[]>([])
   const [transfers, setTransfers] = useState<TransferRow[]>([])
   const [loading, setLoading] = useState(true)
 
-  const [datePreset, setDatePreset] = useState<DatePreset>('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [datePreset, setDatePreset] = useState<DatePreset>('month')
+  const [dateFrom, setDateFrom] = useState(() => presetRange('month').from)
+  const [dateTo, setDateTo] = useState(() => presetRange('month').to)
   const [statusFilter, setStatusFilter] = useState<TransferStatus | 'all'>('all')
   const [branchFilter, setBranchFilter] = useState('all')
 
@@ -453,66 +446,85 @@ export default function ReportPage() {
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-7xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Quantity Report</h1>
-          <p className="text-sm text-[#888888] mt-0.5">Branch movement and item quantity summary</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.report.title}</h1>
+          <p className="text-sm text-[#888888] mt-0.5">{t.report.subtitle}</p>
         </div>
         <div className="flex flex-wrap gap-2 no-print">
           <Button variant="outline" onClick={exportCsv} disabled={loading || filteredTransfers.length === 0}>
             <Download className="h-4 w-4" />
-            Export CSV
+            {t.report.exportCsv}
           </Button>
           <Button variant="outline" onClick={exportDesignedReport} disabled={loading || filteredTransfers.length === 0}>
             <Download className="h-4 w-4" />
-            Export Report
+            {t.report.exportReport}
           </Button>
           <Button variant="outline" onClick={() => window.print()}>
             <Printer className="h-4 w-4" />
-            Print
+            {t.report.print}
           </Button>
         </div>
       </div>
 
       {loading ? (
-        <div className="text-sm text-[#444444]">Loading...</div>
+        <div className="text-sm text-[#444444]">{t.common.loading}</div>
       ) : (
         <div className="space-y-8">
           <Card className="p-4 bg-white no-print">
             <div className="flex items-center gap-2 mb-4">
               <Filter className="h-4 w-4 text-[#888888]" />
-              <h2 className="text-sm font-medium text-[#111111]">Report Filters</h2>
+              <h2 className="text-sm font-medium text-[#111111]">{t.report.filters}</h2>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-3">
               <div>
-                <Label htmlFor="date-preset">Date Range</Label>
+                <Label htmlFor="month-picker">{t.report.month}</Label>
+                <Input
+                  id="month-picker"
+                  type="month"
+                  value={datePreset === 'custom' || datePreset === 'all' ? '' : dateFrom.slice(0, 7)}
+                  onChange={event => {
+                    const [year, month] = event.target.value.split('-').map(Number)
+                    const from = new Date(year, month - 1, 1).toISOString().split('T')[0]
+                    const to = new Date(year, month, 0).toISOString().split('T')[0]
+                    setDatePreset('custom')
+                    setDateFrom(from)
+                    setDateTo(to)
+                  }}
+                />
+              </div>
+              <div>
+                <Label htmlFor="date-preset">{t.report.preset}</Label>
                 <Select id="date-preset" value={datePreset} onChange={event => updatePreset(event.target.value as DatePreset)}>
-                  <option value="all">All Time</option>
-                  <option value="today">Today</option>
-                  <option value="week">Last 7 Days</option>
-                  <option value="month">This Month</option>
-                  <option value="last_month">Last Month</option>
-                  <option value="custom">Custom</option>
+                  <option value="all">{t.report.allTime}</option>
+                  <option value="today">{t.report.today}</option>
+                  <option value="week">{t.report.lastWeek}</option>
+                  <option value="month">{t.report.thisMonth}</option>
+                  <option value="last_month">{t.report.lastMonth}</option>
+                  <option value="custom">{t.report.customRange}</option>
                 </Select>
               </div>
               <div>
-                <Label htmlFor="date-from">From</Label>
+                <Label htmlFor="date-from">{t.report.from}</Label>
                 <Input id="date-from" type="date" value={dateFrom} onChange={event => { setDatePreset('custom'); setDateFrom(event.target.value) }} />
               </div>
               <div>
-                <Label htmlFor="date-to">To</Label>
+                <Label htmlFor="date-to">{t.report.to}</Label>
                 <Input id="date-to" type="date" value={dateTo} onChange={event => { setDatePreset('custom'); setDateTo(event.target.value) }} />
               </div>
               <div>
-                <Label htmlFor="status-filter">Status</Label>
+                <Label htmlFor="status-filter">{t.report.status}</Label>
                 <Select id="status-filter" value={statusFilter} onChange={event => setStatusFilter(event.target.value as TransferStatus | 'all')}>
-                  {statusOptions.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
+                  <option value="all">{t.transfers.allStatuses}</option>
+                  <option value="pending_receipt">{t.status.pending_receipt}</option>
+                  <option value="confirmed">{t.status.confirmed}</option>
+                  <option value="needs_admin_review">{t.status.needs_admin_review}</option>
+                  <option value="admin_resolved">{t.status.admin_resolved}</option>
+                  <option value="cancelled">{t.status.cancelled}</option>
                 </Select>
               </div>
               <div>
-                <Label htmlFor="branch-filter">Branch</Label>
+                <Label htmlFor="branch-filter">{t.report.branch}</Label>
                 <Select id="branch-filter" value={branchFilter} onChange={event => setBranchFilter(event.target.value)}>
-                  <option value="all">All Branches</option>
+                  <option value="all">{t.report.allBranches}</option>
                   {branches.map(branch => (
                     <option key={branch.id} value={branch.id}>{branch.name}</option>
                   ))}
@@ -521,21 +533,21 @@ export default function ReportPage() {
             </div>
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-[#888888]">
-                Showing {filteredTransfers.length} of {transfers.length} transfers.
+                {t.report.showing(filteredTransfers.length, transfers.length)}
               </p>
               <button type="button" onClick={clearFilters} className="self-start text-xs text-[#888888] hover:text-[#111111] transition-colors">
-                Clear filters
+                {t.report.clearFilters}
               </button>
             </div>
           </Card>
 
           <div>
             <SectionHeading
-              title="Item Movement by Branch"
-              description="Each branch as a row, each item as a column — spot in/out quantities at a glance."
+              title={t.report.pivotTitle}
+              description={t.report.pivotSubtitle}
             />
             {pivotData.rows.length === 0 ? (
-              <Card className="px-6 py-8 text-center text-sm text-[#444444]">No item movement matches the selected filters.</Card>
+              <Card className="px-6 py-8 text-center text-sm text-[#444444]">{t.report.noData}</Card>
             ) : (
               <Card className="overflow-hidden bg-white shadow-sm">
                 <div className="overflow-x-auto">
@@ -546,7 +558,7 @@ export default function ReportPage() {
                           rowSpan={2}
                           className="sticky left-0 z-10 bg-[#111111] text-white text-left px-4 py-3 text-xs font-semibold uppercase tracking-wider border-r-2 border-r-[#555] min-w-[140px]"
                         >
-                          Branch
+                          {t.report.branch}
                         </th>
                         {visibleItems.map(item => (
                           <th
@@ -563,9 +575,9 @@ export default function ReportPage() {
                       <tr>
                         {visibleItems.map(item => (
                           <React.Fragment key={item.id}>
-                            <th className="bg-[#1a2e1a] text-green-400 text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l-2 border-l-[#555] w-[64px]">in</th>
-                            <th className="bg-[#2e1a1a] text-[#E8231A] text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l border-l-[#3a1a1a] w-[64px]">out</th>
-                            <th className="bg-[#1a1a2e] text-[#818CF8] text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l border-l-[#252538] w-[64px]">diff</th>
+                            <th className="bg-[#1a2e1a] text-green-400 text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l-2 border-l-[#555] w-[64px]">{t.report.colIn}</th>
+                            <th className="bg-[#2e1a1a] text-[#E8231A] text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l border-l-[#3a1a1a] w-[64px]">{t.report.colOut}</th>
+                            <th className="bg-[#1a1a2e] text-[#818CF8] text-center px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest border-l border-l-[#252538] w-[64px]">{t.report.colDiff}</th>
                           </React.Fragment>
                         ))}
                       </tr>

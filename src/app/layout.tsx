@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
-import { DM_Sans, Space_Mono } from 'next/font/google'
+import { DM_Sans, Space_Mono, Cairo } from 'next/font/google'
 import { AuthShell } from '@/components/auth/auth-shell'
+import { LanguageProvider } from '@/contexts/language-context'
 import { Toaster } from 'sonner'
 import './globals.css'
 
@@ -17,6 +18,12 @@ const spaceMono = Space_Mono({
   display: 'swap',
 })
 
+const cairo = Cairo({
+  subsets: ['arabic', 'latin'],
+  variable: '--font-cairo',
+  display: 'swap',
+})
+
 export const metadata: Metadata = {
   title: 'Al Abdalla Transfer System',
   description: 'Inter-branch item transfer management',
@@ -25,10 +32,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" data-scroll-behavior="smooth">
-      <body className={`${dmSans.variable} ${spaceMono.variable}`}>
-        <AuthShell>
-          {children}
-        </AuthShell>
+      <body className={`${dmSans.variable} ${spaceMono.variable} ${cairo.variable}`}>
+        <LanguageProvider>
+          <AuthShell>
+            {children}
+          </AuthShell>
+        </LanguageProvider>
         <Toaster
           theme="dark"
           position="bottom-right"

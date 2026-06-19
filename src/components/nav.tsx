@@ -19,32 +19,35 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import { cn } from '@/lib/utils'
 import { NotificationBell } from '@/components/notification-bell'
 import { useNotifications } from '@/hooks/use-notifications'
-
-const links = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/transfers', label: 'Transfers', icon: ArrowLeftRight },
-  { href: '/quantities', label: 'Quantities', icon: Boxes },
-  { href: '/branches', label: 'Branches', icon: Building2, adminOnly: true },
-  { href: '/items', label: 'Items', icon: Package, adminOnly: true },
-  { href: '/report', label: 'Report', icon: BarChart3 },
-  { href: '/users', label: 'Users', icon: Users, adminOnly: true },
-]
 
 export function Nav() {
   const pathname = usePathname()
   const router = useRouter()
   const profile = useAppProfile()
+  const { t, lang, setLang } = useLanguage()
   const [signingOut, setSigningOut] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
 
   const notifs = useNotifications(profile?.id)
 
+  const links = [
+    { href: '/', label: t.nav.dashboard, icon: LayoutDashboard },
+    { href: '/transfers', label: t.nav.transfers, icon: ArrowLeftRight },
+    { href: '/quantities', label: t.nav.quantities, icon: Boxes },
+    { href: '/branches', label: t.nav.branches, icon: Building2, adminOnly: true },
+    { href: '/items', label: t.nav.items, icon: Package, adminOnly: true },
+    { href: '/report', label: t.nav.report, icon: BarChart3 },
+    { href: '/users', label: t.nav.users, icon: Users, adminOnly: true },
+  ]
+
   const visibleLinks = useMemo(
     () => links.filter(link => !link.adminOnly || profile?.role === 'super_admin'),
-    [profile?.role]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [profile?.role, lang]
   )
 
   const primaryLinks = visibleLinks.filter(link => !link.adminOnly)
@@ -53,9 +56,9 @@ export function Nav() {
     href === '/' ? pathname === '/' : pathname.startsWith(href)
   )
 
-  const roleLabel = profile?.role === 'super_admin' ? 'Super Admin' : 'Branch Manager'
+  const roleLabel = profile?.role === 'super_admin' ? t.nav.superAdmin : t.nav.branchManager
   const displayName = profile?.full_name || profile?.username || 'Manager'
-  const branchLabel = profile?.role === 'super_admin' ? 'All branches' : profile?.branch?.name ?? 'No branch assigned'
+  const branchLabel = profile?.role === 'super_admin' ? t.nav.allBranches : profile?.branch?.name ?? t.nav.noBranchAssigned
 
   async function signOut() {
     setSigningOut(true)
@@ -63,12 +66,16 @@ export function Nav() {
     router.replace('/login')
   }
 
+  function toggleLang() {
+    setLang(lang === 'en' ? 'ar' : 'en')
+  }
+
   return (
     <>
-      <nav className="hidden lg:flex fixed inset-y-0 left-0 z-40 w-60 flex-col border-r border-[#E5E5E5] bg-[#FAFAFA] print:hidden">
+      <nav className="hidden lg:flex fixed inset-y-0 start-0 z-40 w-60 flex-col border-e border-[#E5E5E5] bg-[#FAFAFA] print:hidden">
         <div className="px-4 py-4 border-b border-[#E5E5E5]">
           <Image src="/logo.png" alt="Ahmad Al'Abdalla" width={180} height={64} className="object-contain h-12 w-auto" priority />
-          <p className="mt-2 px-0.5 text-[10px] text-[#9CA3AF] font-mono">Branch Movement System</p>
+          <p className="mt-2 px-0.5 text-[10px] text-[#9CA3AF] font-mono">{t.nav.tagline}</p>
         </div>
 
         <div className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
@@ -93,7 +100,7 @@ export function Nav() {
         <div className="px-3 pb-4">
           <Link href="/transfers/new" className="flex items-center justify-center gap-2 h-9 w-full rounded-md bg-[#E8231A] text-white text-sm font-semibold hover:bg-[#f03020] transition-colors">
             <Plus className="h-4 w-4 text-white" />
-            <span className="text-white">New Transfer</span>
+            <span className="text-white">{t.nav.newTransfer}</span>
           </Link>
 
           <div className="mt-4 rounded-lg border border-[#E5E5E5] bg-white p-3">
@@ -105,18 +112,27 @@ export function Nav() {
               </div>
               <NotificationBell {...notifs} placement="left" />
             </div>
-            <button
-              type="button"
-              onClick={signOut}
-              disabled={signingOut}
-              className="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-md border border-[#DADADA] text-xs font-medium text-[#6B7280] transition-colors hover:bg-black/5 hover:text-[#111111] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              {signingOut ? 'Signing out...' : 'Log Out'}
-            </button>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                onClick={toggleLang}
+                className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border border-[#DADADA] text-xs font-medium text-[#6B7280] transition-colors hover:bg-black/5 hover:text-[#111111]"
+              >
+                {t.nav.switchLang}
+              </button>
+              <button
+                type="button"
+                onClick={signOut}
+                disabled={signingOut}
+                className="flex h-8 flex-1 items-center justify-center gap-2 rounded-md border border-[#DADADA] text-xs font-medium text-[#6B7280] transition-colors hover:bg-black/5 hover:text-[#111111] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                {signingOut ? t.nav.signingOut : t.nav.logOut}
+              </button>
+            </div>
           </div>
 
-          <p className="mt-4 px-1 text-[10px] text-[#9CA3AF] font-mono">Ahmad Al Abdalla - Since 1987</p>
+          <p className="mt-4 px-1 text-[10px] text-[#9CA3AF] font-mono">{t.nav.footer}</p>
         </div>
       </nav>
 
@@ -125,16 +141,23 @@ export function Nav() {
         <div className="flex items-center gap-2">
           <Link href="/transfers/new" className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-[#E8231A] text-white text-xs font-semibold hover:bg-[#f03020] transition-colors">
             <Plus className="h-3.5 w-3.5 text-white" />
-            <span className="text-white">New Transfer</span>
+            <span className="text-white">{t.nav.newTransfer}</span>
           </Link>
           <NotificationBell {...notifs} />
+          <button
+            type="button"
+            onClick={toggleLang}
+            className="flex h-8 px-2 items-center justify-center rounded-lg border border-[#DADADA] text-[10px] font-semibold text-[#6B7280] transition-colors hover:bg-black/5"
+          >
+            {t.nav.switchLang}
+          </button>
           <button
             type="button"
             onClick={signOut}
             disabled={signingOut}
             className="flex h-8 w-8 items-center justify-center rounded-lg border border-[#DADADA] text-[#6B7280] transition-colors hover:bg-black/5 hover:text-[#111111] disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Log out"
-            title="Log out"
+            aria-label={t.nav.logOut}
+            title={t.nav.logOut}
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -211,7 +234,7 @@ export function Nav() {
             )}
           >
             <MoreHorizontal className="h-5 w-5" strokeWidth={moreOpen || secondaryActive ? 2.5 : 1.75} />
-            More
+            {t.nav.more}
           </button>
         )}
       </nav>

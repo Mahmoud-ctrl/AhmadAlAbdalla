@@ -1,10 +1,11 @@
-﻿'use client'
+'use client'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
 import { invalidateBranches } from '@/lib/data-cache'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import type { Branch } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -33,16 +34,9 @@ function isPermissionError(error: DbError) {
     || message.includes('not authorized')
 }
 
-function branchMutationError(error: DbError) {
-  if (isPermissionError(error)) {
-    return 'Super admin access is required.'
-  }
-
-  return error.message
-}
-
 export default function BranchesPage() {
   const profile = useAppProfile()
+  const { t } = useLanguage()
   const [branches, setBranches] = useState<BranchWithStats[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -51,6 +45,10 @@ export default function BranchesPage() {
   const [location, setLocation] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null)
+
+  function branchMutationError(error: DbError) {
+    return isPermissionError(error) ? t.branches.errorAccess : error.message
+  }
 
   async function load() {
     const [{ data: branchData }, { data: transfers }] = await Promise.all([
@@ -62,8 +60,8 @@ export default function BranchesPage() {
     const transferList = transfers || []
 
     const withStats: BranchWithStats[] = branchList.map(b => {
-      const outgoing = transferList.filter(t => t.sender_branch_id === b.id)
-      const incoming = transferList.filter(t => t.receiver_branch_id === b.id)
+      const outgoing = transferList.filter(tr => tr.sender_branch_id === b.id)
+      const incoming = transferList.filter(tr => tr.receiver_branch_id === b.id)
       const outgoingValue = outgoing.reduce((sum, transfer) => {
         const lines = (transfer.transfer_lines ?? []) as { quantity_sent: number; unit_price_snapshot: number }[]
         return sum + lines.reduce((lineSum, line) => lineSum + Number(line.quantity_sent) * Number(line.unit_price_snapshot), 0)
@@ -88,18 +86,18 @@ export default function BranchesPage() {
   const isSuperAdmin = profile?.role === 'super_admin'
 
   function openAdd() {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
+    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
     setEditing(null); setName(''); setLocation(''); setDialogOpen(true)
   }
 
   function openEdit(b: Branch) {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
+    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
     setEditing(b); setName(b.name); setLocation(b.location ?? ''); setDialogOpen(true)
   }
 
   async function save() {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
-    if (!name.trim()) { toast.error('Branch name is required'); return }
+    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
+    if (!name.trim()) { toast.error(t.branches.errorName); return }
     setSaving(true)
     const payload = { name: name.trim(), location: location.trim() || null }
     const { error } = editing
@@ -107,7 +105,7 @@ export default function BranchesPage() {
       : await supabase.from('branches').insert(payload)
 
     if (error) { toast.error(branchMutationError(error)); setSaving(false); return }
-    toast.success(editing ? 'Branch updated' : 'Branch added')
+    toast.success(editing ? t.branches.successUpdate : t.branches.successAdd)
     setSaving(false)
     setDialogOpen(false)
     invalidateBranches()
@@ -115,14 +113,14 @@ export default function BranchesPage() {
   }
 
   async function confirmDelete(b: Branch) {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
+    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
     const { error } = await supabase.from('branches').delete().eq('id', b.id)
     if (error) {
-      toast.error(error.code === '23503' ? 'Cannot delete - branch has transfers' : branchMutationError(error))
+      toast.error(error.code === '23503' ? t.branches.errorFK : branchMutationError(error))
       setDeleteTarget(null)
       return
     }
-    toast.success('Branch deleted')
+    toast.success(t.branches.successDelete)
     setDeleteTarget(null)
     invalidateBranches()
     load()
@@ -132,31 +130,29 @@ export default function BranchesPage() {
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-5xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Branches</h1>
-          <p className="text-sm text-[#888888] mt-0.5">{branches.length} branch{branches.length !== 1 ? 'es' : ''} registered</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.branches.title}</h1>
+          <p className="text-sm text-[#888888] mt-0.5">{t.branches.subtitle(branches.length)}</p>
         </div>
         {isSuperAdmin && (
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4" />
-            Add Branch
+            {t.branches.add}
           </Button>
         )}
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-sm text-[#444444]">Loading…</div>
+        <div className="py-16 text-center text-sm text-[#444444]">{t.common.loading}</div>
       ) : !isSuperAdmin ? (
         <Card className="p-5 bg-white">
-          <p className="text-sm font-medium text-[#111111]">Super admin access is required.</p>
-          <p className="mt-1 text-sm text-[#888888]">
-            Branch management is protected by Supabase row level security and is only available to super admins.
-          </p>
+          <p className="text-sm font-medium text-[#111111]">{t.branches.errorAccess}</p>
+          <p className="mt-1 text-sm text-[#888888]">{t.branches.errorAccessDesc}</p>
         </Card>
       ) : branches.length === 0 ? (
         <div className="py-16 text-center">
           <Building2 className="h-8 w-8 text-[#D1D5DB] mx-auto mb-3" />
-          <p className="text-sm text-[#888888] mb-1">No branches yet</p>
-          <button onClick={openAdd} className="text-xs text-[#E8231A] hover:underline">Add the first branch →</button>
+          <p className="text-sm text-[#888888] mb-1">{t.branches.empty}</p>
+          <button onClick={openAdd} className="text-xs text-[#E8231A] hover:underline">{t.branches.emptyAdd}</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -167,7 +163,7 @@ export default function BranchesPage() {
                   <p className="font-semibold text-[#111111] text-sm">{b.name}</p>
                   {b.location
                     ? <p className="text-xs text-[#9CA3AF] mt-0.5">{b.location}</p>
-                    : <p className="text-xs text-[#D1D5DB] mt-0.5">No location</p>
+                    : <p className="text-xs text-[#D1D5DB] mt-0.5">{t.branches.noLocation}</p>
                   }
                 </div>
                 <div className="flex items-center gap-0.5 -mr-1">
@@ -181,15 +177,15 @@ export default function BranchesPage() {
               </div>
               <div className="grid grid-cols-3 gap-2 pt-3 border-t border-[#F0F0F0]">
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Outgoing</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.branches.outgoing}</p>
                   <p className="text-xs font-mono font-medium text-[#111111]">{formatCurrency(b.outgoingValue)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Incoming</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.branches.incoming}</p>
                   <p className="text-xs font-mono font-medium text-green-500">{formatCurrency(b.incomingValue)}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Discrepancy</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.branches.discrepancy}</p>
                   <p className={`text-xs font-mono font-semibold ${b.discrepancyValue > 0 ? 'text-red-500' : 'text-[#9CA3AF]'}`}>
                     {formatCurrency(b.discrepancyValue)}
                   </p>
@@ -200,32 +196,30 @@ export default function BranchesPage() {
         </div>
       )}
 
-      {/* Add / Edit Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title={editing ? 'Edit Branch' : 'Add Branch'}>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title={editing ? t.branches.dialogEdit : t.branches.dialogAdd}>
         <div className="space-y-4">
           <div>
-            <Label htmlFor="name">Branch Name *</Label>
-            <Input id="name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Beirut - Hamra" />
+            <Label htmlFor="name">{t.branches.fieldName}</Label>
+            <Input id="name" value={name} onChange={e => setName(e.target.value)} placeholder={t.branches.fieldNamePlaceholder} />
           </div>
           <div>
-            <Label htmlFor="location">Location</Label>
-            <Input id="location" value={location} onChange={e => setLocation(e.target.value)} placeholder="e.g. Beirut, Lebanon" />
+            <Label htmlFor="location">{t.branches.fieldLocation}</Label>
+            <Input id="location" value={location} onChange={e => setLocation(e.target.value)} placeholder={t.branches.fieldLocationPlaceholder} />
           </div>
           <div className="flex gap-2 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setDialogOpen(false)}>Cancel</Button>
-            <Button onClick={save} loading={saving}>{editing ? 'Save Changes' : 'Add Branch'}</Button>
+            <Button variant="ghost" onClick={() => setDialogOpen(false)}>{t.branches.cancel}</Button>
+            <Button onClick={save} loading={saving}>{editing ? t.branches.save : t.branches.add}</Button>
           </div>
         </div>
       </Dialog>
 
-      {/* Delete Confirmation */}
-      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete Branch">
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title={t.branches.dialogDelete}>
         <p className="text-sm text-[#888888] mb-5">
-          Delete <span className="text-[#111111] font-medium">{deleteTarget?.name}</span>? This cannot be undone. Branches with active transfers cannot be deleted.
+          {deleteTarget ? t.branches.deleteConfirm(deleteTarget.name) : ''}
         </p>
         <div className="flex gap-2 justify-end">
-          <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-          <Button variant="destructive" onClick={() => deleteTarget && confirmDelete(deleteTarget)}>Delete</Button>
+          <Button variant="ghost" onClick={() => setDeleteTarget(null)}>{t.branches.cancel}</Button>
+          <Button variant="destructive" onClick={() => deleteTarget && confirmDelete(deleteTarget)}>{t.branches.delete}</Button>
         </div>
       </Dialog>
     </div>

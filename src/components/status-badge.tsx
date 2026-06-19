@@ -1,19 +1,16 @@
+'use client'
+
 import { Badge } from '@/components/ui/badge'
+import { useLanguage } from '@/contexts/language-context'
 import type { TransferStatus } from '@/types'
 
 interface StatusBadgeProps {
   status: TransferStatus
 }
 
-const statusLabels: Record<TransferStatus, string> = {
-  pending_receipt: 'Pending Receipt',
-  confirmed: 'Confirmed',
-  needs_admin_review: 'Needs Review',
-  admin_resolved: 'Admin Resolved',
-  cancelled: 'Cancelled',
-}
-
 export function StatusBadge({ status }: StatusBadgeProps) {
+  const { t } = useLanguage()
+
   const dot = (
     <span
       className={
@@ -36,7 +33,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
   return (
     <Badge variant={variant}>
       {dot}
-      {statusLabels[status]}
+      {t.status[status]}
     </Badge>
   )
 }

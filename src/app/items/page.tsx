@@ -1,10 +1,11 @@
-﻿'use client'
+'use client'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { supabase } from '@/lib/supabase'
 import { formatCurrency } from '@/lib/utils'
 import { invalidateItems } from '@/lib/data-cache'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import type { Item } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -30,16 +31,9 @@ function isPermissionError(error: DbError) {
     || message.includes('not authorized')
 }
 
-function itemMutationError(error: DbError) {
-  if (isPermissionError(error)) {
-    return 'Super admin access is required.'
-  }
-
-  return error.message
-}
-
 export default function ItemsPage() {
   const profile = useAppProfile()
+  const { t } = useLanguage()
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -50,6 +44,10 @@ export default function ItemsPage() {
   const [price, setPrice] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Item | null>(null)
+
+  function itemMutationError(error: DbError) {
+    return isPermissionError(error) ? t.items.errorAccess : error.message
+  }
 
   async function load() {
     const { data } = await supabase.from('items').select('*').order('name')
@@ -62,12 +60,12 @@ export default function ItemsPage() {
   const isSuperAdmin = profile?.role === 'super_admin'
 
   function openAdd() {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
+    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
     setEditing(null); setSelectedSuggestion(null); setName(''); setUnit(''); setPrice(''); setDialogOpen(true)
   }
 
   function openEdit(item: Item) {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
+    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
     setEditing(item); setSelectedSuggestion(item); setName(item.name); setUnit(item.unit)
     setPrice(String(item.price_per_unit)); setDialogOpen(true)
   }
@@ -79,11 +77,11 @@ export default function ItemsPage() {
   }
 
   async function save() {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
-    if (!name.trim()) { toast.error('Item name is required'); return }
-    if (!unit.trim()) { toast.error('Unit is required'); return }
+    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
+    if (!name.trim()) { toast.error(t.items.errorName); return }
+    if (!unit.trim()) { toast.error(t.items.errorUnit); return }
     const priceNum = parseFloat(price)
-    if (isNaN(priceNum) || priceNum < 0) { toast.error('Enter a valid price'); return }
+    if (isNaN(priceNum) || priceNum < 0) { toast.error(t.items.errorPrice); return }
 
     setSaving(true)
     const payload = { name: name.trim(), unit: unit.trim(), price_per_unit: priceNum }
@@ -92,7 +90,7 @@ export default function ItemsPage() {
       : await supabase.from('items').insert(payload)
 
     if (error) { toast.error(itemMutationError(error)); setSaving(false); return }
-    toast.success(editing ? 'Item updated' : 'Item added')
+    toast.success(editing ? t.items.successUpdate : t.items.successAdd)
     setSaving(false)
     setDialogOpen(false)
     invalidateItems()
@@ -100,14 +98,14 @@ export default function ItemsPage() {
   }
 
   async function confirmDelete(item: Item) {
-    if (!isSuperAdmin) { toast.error('Super admin access is required.'); return }
+    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
     const { error } = await supabase.from('items').delete().eq('id', item.id)
     if (error) {
-      toast.error(error.code === '23503' ? 'Cannot delete - item has transfers' : itemMutationError(error))
+      toast.error(error.code === '23503' ? t.items.errorFK : itemMutationError(error))
       setDeleteTarget(null)
       return
     }
-    toast.success('Item deleted')
+    toast.success(t.items.successDelete)
     setDeleteTarget(null)
     invalidateItems()
     load()
@@ -117,31 +115,29 @@ export default function ItemsPage() {
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-4xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Items</h1>
-          <p className="text-sm text-[#888888] mt-0.5">{items.length} item{items.length !== 1 ? 's' : ''} in catalog</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.items.title}</h1>
+          <p className="text-sm text-[#888888] mt-0.5">{t.items.subtitle(items.length)}</p>
         </div>
         {isSuperAdmin && (
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4" />
-            Add Item
+            {t.items.add}
           </Button>
         )}
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-sm text-[#444444]">Loading…</div>
+        <div className="py-16 text-center text-sm text-[#444444]">{t.common.loading}</div>
       ) : !isSuperAdmin ? (
         <Card className="p-5 bg-white">
-          <p className="text-sm font-medium text-[#111111]">Super admin access is required.</p>
-          <p className="mt-1 text-sm text-[#888888]">
-            Item management is protected by Supabase row level security and is only available to super admins.
-          </p>
+          <p className="text-sm font-medium text-[#111111]">{t.items.errorAccess}</p>
+          <p className="mt-1 text-sm text-[#888888]">{t.items.errorAccessDesc}</p>
         </Card>
       ) : items.length === 0 ? (
         <div className="py-16 text-center">
           <Package className="h-8 w-8 text-[#D1D5DB] mx-auto mb-3" />
-          <p className="text-sm text-[#888888] mb-1">No items yet</p>
-          <button onClick={openAdd} className="text-xs text-[#E8231A] hover:underline">Add the first item →</button>
+          <p className="text-sm text-[#888888] mb-1">{t.items.empty}</p>
+          <button onClick={openAdd} className="text-xs text-[#E8231A] hover:underline">{t.items.emptyAdd}</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -164,7 +160,7 @@ export default function ItemsPage() {
                 </div>
               </div>
               <div className="pt-3 border-t border-[#F0F0F0]">
-                <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Price / Unit</p>
+                <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.items.pricePerUnit}</p>
                 <p className="text-sm font-mono font-semibold text-[#111111]">{formatCurrency(Number(item.price_per_unit))}</p>
               </div>
             </div>
@@ -172,24 +168,22 @@ export default function ItemsPage() {
         </div>
       )}
 
-      {/* Add / Edit Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title={editing ? 'Edit Item' : 'Add Item'}>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} title={editing ? t.items.dialogEdit : t.items.dialogAdd}>
         <div className="space-y-4">
           <div>
-            <Label htmlFor="item-name">Item Name *</Label>
+            <Label htmlFor="item-name">{t.items.fieldName}</Label>
             <ItemAutocomplete
               items={items.filter(i => !editing || i.id !== editing.id)}
               selectedItem={selectedSuggestion}
               onSelect={handleAutocompleteSelect}
-              placeholder="e.g. Pita Bread"
+              placeholder={t.items.fieldNamePlaceholder}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="unit">Unit *</Label>
+              <Label htmlFor="unit">{t.items.fieldUnit}</Label>
               <Select id="unit" value={unit} onChange={e => setUnit(e.target.value)}>
-                <option value="">Select unit…</option>
-                {/* show existing unit even if it's not in the preset list */}
+                <option value="">{t.items.fieldUnitPlaceholder}</option>
                 {unit && !UNITS.includes(unit as typeof UNITS[number]) && (
                   <option value={unit}>{unit}</option>
                 )}
@@ -197,25 +191,24 @@ export default function ItemsPage() {
               </Select>
             </div>
             <div>
-              <Label htmlFor="price">Price per Unit (USD) *</Label>
-              <Input id="price" type="number" min="0" step="0.01" value={price} onChange={e => setPrice(e.target.value)} placeholder="0.00" />
+              <Label htmlFor="price">{t.items.fieldPrice}</Label>
+              <Input id="price" type="number" min="0" step="0.01" value={price} onChange={e => setPrice(e.target.value)} placeholder={t.items.fieldPricePlaceholder} />
             </div>
           </div>
           <div className="flex gap-2 justify-end pt-2">
-            <Button variant="ghost" onClick={() => setDialogOpen(false)}>Cancel</Button>
-            <Button onClick={save} loading={saving}>{editing ? 'Save Changes' : 'Add Item'}</Button>
+            <Button variant="ghost" onClick={() => setDialogOpen(false)}>{t.items.cancel}</Button>
+            <Button onClick={save} loading={saving}>{editing ? t.items.save : t.items.add}</Button>
           </div>
         </div>
       </Dialog>
 
-      {/* Delete Confirmation */}
-      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title="Delete Item">
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} title={t.items.dialogDelete}>
         <p className="text-sm text-[#888888] mb-5">
-          Delete <span className="text-[#111111] font-medium">{deleteTarget?.name}</span>? Items referenced in transfers cannot be deleted.
+          {deleteTarget ? t.items.deleteConfirm(deleteTarget.name) : ''}
         </p>
         <div className="flex gap-2 justify-end">
-          <Button variant="ghost" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-          <Button variant="destructive" onClick={() => deleteTarget && confirmDelete(deleteTarget)}>Delete</Button>
+          <Button variant="ghost" onClick={() => setDeleteTarget(null)}>{t.items.cancel}</Button>
+          <Button variant="destructive" onClick={() => deleteTarget && confirmDelete(deleteTarget)}>{t.items.delete}</Button>
         </div>
       </Dialog>
     </div>

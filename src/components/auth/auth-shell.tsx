@@ -159,7 +159,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <ProfileContext.Provider value={appProfile}>
       <Nav />
-      <main className="pt-14 pb-16 lg:pt-0 lg:pb-0 lg:pl-60 min-h-screen bg-white">
+      <main className="pt-14 pb-16 lg:pt-0 lg:pb-0 lg:ps-60 min-h-screen bg-white">
         <AnimatePresence mode="wait">
           <motion.div
             key={pathname}

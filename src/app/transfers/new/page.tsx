@@ -10,6 +10,7 @@ import { formatCurrency } from '@/lib/utils'
 import { isDecimalUnit } from '@/lib/constants'
 import { fetchBranches, fetchItems } from '@/lib/data-cache'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import type { Branch, Item } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -28,6 +29,7 @@ const emptyLine = (): DraftLine => ({ itemId: '', quantity: '' })
 export default function NewTransferPage() {
   const router = useRouter()
   const profile = useAppProfile()
+  const { t } = useLanguage()
   const [branches, setBranches] = useState<Branch[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
@@ -79,12 +81,12 @@ export default function NewTransferPage() {
     e.preventDefault()
 
     if (!effectiveSenderBranchId) {
-      toast.error(profile?.role === 'super_admin' ? 'Select the sender branch.' : 'Your user must be assigned to a sender branch before creating transfers.')
+      toast.error(profile?.role === 'super_admin' ? t.newTransfer.errorNoSender : t.newTransfer.errorNoSenderBranch)
       return
     }
 
     if (!receiverBranchId) {
-      toast.error('Select the receiving branch.')
+      toast.error(t.newTransfer.errorNoReceiver)
       return
     }
 
@@ -96,23 +98,23 @@ export default function NewTransferPage() {
 
     for (const line of payloadLines) {
       if (!line.item_id) {
-        toast.error('Every line needs an item.')
+        toast.error(t.newTransfer.errorNoItem)
         return
       }
 
       if (!Number.isFinite(line.quantity_sent) || line.quantity_sent <= 0) {
-        toast.error('Every line quantity must be greater than 0.')
+        toast.error(t.newTransfer.errorQty)
         return
       }
 
       const lineItem = items.find(candidate => candidate.id === line.item_id)
       if (lineItem && !isDecimalUnit(lineItem.unit) && !Number.isInteger(line.quantity_sent)) {
-        toast.error(`Quantity for "${lineItem.name}" must be a whole number (unit: ${lineItem.unit}).`)
+        toast.error(t.newTransfer.errorWholeNumber(lineItem.name, lineItem.unit))
         return
       }
 
       if (seenItems.has(line.item_id)) {
-        toast.error('Each item can appear only once per transfer.')
+        toast.error(t.newTransfer.errorDuplicate)
         return
       }
 
@@ -124,7 +126,7 @@ export default function NewTransferPage() {
     const { data, error } = await supabase.rpc('create_transfer', {
       p_receiver_branch_id: receiverBranchId,
       p_lines: payloadLines,
-      p_sent_at: new Date(sentAt).toISOString(),
+      p_sent_at: profile?.role === 'super_admin' ? new Date(sentAt).toISOString() : new Date().toISOString(),
       p_notes: notes.trim() || null,
       p_sender_branch_id: profile?.role === 'super_admin' ? effectiveSenderBranchId : null,
     })
@@ -136,12 +138,12 @@ export default function NewTransferPage() {
       return
     }
 
-    toast.success('Transfer sent for receiver confirmation')
+    toast.success(t.newTransfer.success)
     router.push(`/transfers/${data}`)
   }
 
   if (loading) {
-    return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">Loading...</div>
+    return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">{t.common.loading}</div>
   }
 
   return (
@@ -153,27 +155,27 @@ export default function NewTransferPage() {
           </button>
         </Link>
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Create Transfer</h1>
-          <p className="text-sm text-[#888888] mt-0.5">Send multiple item lines for receiver confirmation</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.newTransfer.title}</h1>
+          <p className="text-sm text-[#888888] mt-0.5">{t.newTransfer.subtitle}</p>
         </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <Card className="p-5">
-          <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Route</h2>
+          <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">{t.newTransfer.route}</h2>
           <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
             <div>
-              <Label>Sender Branch</Label>
+              <Label>{t.newTransfer.senderBranch}</Label>
               {profile?.role === 'super_admin' ? (
                 <Select value={senderBranchId} onChange={e => setSenderBranchId(e.target.value)}>
-                  <option value="">Select branch...</option>
+                  <option value="">{t.common.selectBranch}</option>
                   {branches.map(branch => (
                     <option key={branch.id} value={branch.id}>{branch.name}</option>
                   ))}
                 </Select>
               ) : (
                 <div className="flex h-9 items-center rounded-md border border-[#DADADA] bg-[#F8F8F8] px-3 text-sm text-[#111111]">
-                  {senderBranch?.name ?? 'No branch assigned'}
+                  {senderBranch?.name ?? t.newTransfer.noBranchAssigned}
                 </div>
               )}
             </div>
@@ -181,9 +183,9 @@ export default function NewTransferPage() {
               <ArrowRight className="h-4 w-4 text-[#D1D5DB]" />
             </div>
             <div>
-              <Label htmlFor="receiver-branch">Receiver Branch *</Label>
+              <Label htmlFor="receiver-branch">{t.newTransfer.receiverBranch}</Label>
               <Select id="receiver-branch" value={receiverBranchId} onChange={e => setReceiverBranchId(e.target.value)}>
-                <option value="">Select branch...</option>
+                <option value="">{t.common.selectBranch}</option>
                 {availableReceivers.map(branch => (
                   <option key={branch.id} value={branch.id}>{branch.name}</option>
                 ))}
@@ -194,10 +196,10 @@ export default function NewTransferPage() {
 
         <Card className="p-5">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider">Items</h2>
+            <h2 className="text-xs font-medium text-[#444444] uppercase tracking-wider">{t.newTransfer.items}</h2>
             <Button type="button" variant="outline" size="sm" onClick={() => setLines(current => [...current, emptyLine()])}>
               <Plus className="h-3.5 w-3.5" />
-              Add Line
+              {t.newTransfer.addLine}
             </Button>
           </div>
 
@@ -211,9 +213,9 @@ export default function NewTransferPage() {
               return (
                 <div key={index} className="grid grid-cols-[1fr,120px,90px,auto] gap-2 items-end">
                   <div>
-                    <Label htmlFor={`item-${index}`}>Item *</Label>
+                    <Label htmlFor={`item-${index}`}>{t.quantities.item} *</Label>
                     <Select id={`item-${index}`} value={line.itemId} onChange={e => updateLine(index, { itemId: e.target.value })}>
-                      <option value="">Select item...</option>
+                      <option value="">{t.common.selectItem}</option>
                       {items.map(candidate => (
                         <option key={candidate.id} value={candidate.id}>
                           {candidate.name} ({candidate.unit})
@@ -222,7 +224,7 @@ export default function NewTransferPage() {
                     </Select>
                   </div>
                   <div>
-                    <Label htmlFor={`quantity-${index}`}>Quantity *</Label>
+                    <Label htmlFor={`quantity-${index}`}>{t.newTransfer.quantity}</Label>
                     <Input
                       id={`quantity-${index}`}
                       type="number"
@@ -233,7 +235,7 @@ export default function NewTransferPage() {
                     />
                   </div>
                   <div>
-                    <p className="mb-2 text-xs text-[#444444]">Value</p>
+                    <p className="mb-2 text-xs text-[#444444]">{t.newTransfer.value}</p>
                     <p className="h-9 rounded-md border border-[#E5E5E5] px-2 py-2 text-right text-xs font-mono text-[#111111]">
                       {formatCurrency(value)}
                     </p>
@@ -247,23 +249,25 @@ export default function NewTransferPage() {
           </div>
 
           <div className="mt-4 border-t border-[#F0F0F0] pt-3 text-right text-sm">
-            <span className="text-[#888888]">Total value: </span>
+            <span className="text-[#888888]">{t.newTransfer.totalValue}</span>
             <span className="font-mono font-semibold text-[#E8231A]">{formatCurrency(totals)}</span>
           </div>
         </Card>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <Label htmlFor="sent-at">Sent Date *</Label>
-            <Input id="sent-at" type="date" value={sentAt} onChange={e => setSentAt(e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="notes">Notes</Label>
+          {profile?.role === 'super_admin' && (
+            <div>
+              <Label htmlFor="sent-at">{t.newTransfer.sentDate}</Label>
+              <Input id="sent-at" type="date" value={sentAt} onChange={e => setSentAt(e.target.value)} />
+            </div>
+          )}
+          <div className={profile?.role !== 'super_admin' ? 'sm:col-span-2' : ''}>
+            <Label htmlFor="notes">{t.newTransfer.notes}</Label>
             <Textarea
               id="notes"
               value={notes}
               onChange={e => setNotes(e.target.value)}
-              placeholder="Optional context for the receiving branch"
+              placeholder={t.newTransfer.notesPlaceholder}
               className="min-h-9"
             />
           </div>
@@ -271,10 +275,10 @@ export default function NewTransferPage() {
 
         <div className="flex gap-3 justify-end">
           <Link href="/transfers">
-            <Button type="button" variant="ghost">Cancel</Button>
+            <Button type="button" variant="ghost">{t.common.cancel}</Button>
           </Link>
           <Button type="submit" loading={saving} size="lg">
-            Create Transfer
+            {t.newTransfer.createTransfer}
           </Button>
         </div>
       </form>

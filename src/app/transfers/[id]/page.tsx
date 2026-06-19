@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { isDecimalUnit } from '@/lib/constants'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import type { TransferRow, TransferStatus } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -30,6 +31,7 @@ export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>()
 
   const profile = useAppProfile()
+  const { t } = useLanguage()
   const [transfer, setTransfer] = useState<TransferRow | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
@@ -112,12 +114,12 @@ export default function TransferDetailPage() {
 
     for (const line of lines) {
       if (!Number.isFinite(line.quantity_received) || line.quantity_received < 0) {
-        toast.error('Received quantities must be zero or greater.')
+        toast.error(t.transfer.errorQtyNonNegative)
         return
       }
       const transferLine = transfer.transfer_lines.find(l => l.id === line.line_id)
       if (transferLine && !isDecimalUnit(transferLine.item?.unit ?? '') && !Number.isInteger(line.quantity_received)) {
-        toast.error(`Received quantity for "${transferLine.item?.name}" must be a whole number (unit: ${transferLine.item?.unit}).`)
+        toast.error(t.transfer.errorWholeNumber(transferLine.item?.name ?? '', transferLine.item?.unit ?? ''))
         return
       }
     }
@@ -135,7 +137,7 @@ export default function TransferDetailPage() {
       return
     }
 
-    toast.success(data === 'confirmed' ? 'Transfer confirmed' : 'Mismatch sent to admin review')
+    toast.success(data === 'confirmed' ? t.transfer.successConfirmed : t.transfer.successMismatch)
     setReceiptNote('')
     await load()
   }
@@ -157,16 +159,16 @@ export default function TransferDetailPage() {
       return
     }
 
-    toast.success('Transfer resolved')
+    toast.success(t.transfer.successResolved)
     setAdminNotes('')
     await load()
   }
 
-  if (loading) return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">Loading...</div>
+  if (loading) return <div className="px-4 py-5 sm:px-8 sm:py-8 text-sm text-[#444444]">{t.common.loading}</div>
   if (notFound) return (
     <div className="px-8 py-8">
-      <p className="text-sm text-[#888888]">Transfer not found.</p>
-      <Link href="/transfers" className="text-xs text-[#E8231A] hover:underline mt-2 inline-block">Back to transfers</Link>
+      <p className="text-sm text-[#888888]">{t.transfer.notFound}</p>
+      <Link href="/transfers" className="text-xs text-[#E8231A] hover:underline mt-2 inline-block">{t.transfer.backToTransfers}</Link>
     </div>
   )
   if (!transfer) return null
@@ -182,7 +184,7 @@ export default function TransferDetailPage() {
           </Link>
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold text-[#111111]">Transfer Detail</h1>
+              <h1 className="text-xl font-semibold text-[#111111]">{t.transfer.title}</h1>
               <StatusBadge status={transfer.status} />
             </div>
             <p className="text-xs text-[#444444] font-mono mt-1">{transfer.id}</p>
@@ -192,11 +194,11 @@ export default function TransferDetailPage() {
 
       <div className="grid gap-5">
         <Card className="p-5">
-          <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Movement Info</p>
+          <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">{t.transfer.movementInfo}</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4">
-            <InfoRow label="Sent Date" value={formatDate(transfer.sent_at)} />
+            <InfoRow label={t.transfer.sentDate} value={formatDate(transfer.sent_at)} />
             <InfoRow
-              label="Route"
+              label={t.transfer.route}
               value={
                 <span className="flex items-center gap-1.5">
                   <span className="text-[#888888]">{transfer.sender_branch?.name}</span>
@@ -205,16 +207,16 @@ export default function TransferDetailPage() {
                 </span>
               }
             />
-            {transfer.received_at && <InfoRow label="Received Date" value={formatDate(transfer.received_at)} />}
-            {transfer.resolved_at && <InfoRow label="Resolved Date" value={formatDate(transfer.resolved_at)} />}
-            {transfer.notes && <InfoRow label="Notes" value={transfer.notes} />}
-            {transfer.admin_notes && <InfoRow label="Admin Notes" value={transfer.admin_notes} />}
+            {transfer.received_at && <InfoRow label={t.transfer.receivedDate} value={formatDate(transfer.received_at)} />}
+            {transfer.resolved_at && <InfoRow label={t.transfer.resolvedDate} value={formatDate(transfer.resolved_at)} />}
+            {transfer.notes && <InfoRow label={t.transfer.notes} value={transfer.notes} />}
+            {transfer.admin_notes && <InfoRow label={t.transfer.adminNotes} value={transfer.admin_notes} />}
           </div>
         </Card>
 
         <Card>
           <div className="p-5 border-b border-[#E5E5E5]">
-            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider">Transfer Lines</p>
+            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider">{t.transfer.transferLines}</p>
           </div>
 
           {/* Mobile card view */}
@@ -229,19 +231,19 @@ export default function TransferDetailPage() {
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                     <div className="flex justify-between">
-                      <span className="text-[#888888]">Sent</span>
+                      <span className="text-[#888888]">{t.transfer.sent}</span>
                       <span className="font-mono">{Number(line.quantity_sent)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#888888]">Received</span>
+                      <span className="text-[#888888]">{t.transfer.received}</span>
                       <span className="font-mono">{line.quantity_received === null ? '-' : Number(line.quantity_received)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#888888]">Value</span>
+                      <span className="text-[#888888]">{t.transfer.value}</span>
                       <span className="font-mono">{formatCurrency(lineSentValue(line))}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-[#888888]">Difference</span>
+                      <span className="text-[#888888]">{t.transfer.difference}</span>
                       <span className={`font-mono ${difference === 0 ? 'text-[#888888]' : 'text-red-500'}`}>
                         {line.quantity_received === null ? '-' : difference}
                       </span>
@@ -257,11 +259,11 @@ export default function TransferDetailPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[#F0F0F0] text-left text-xs text-[#888888]">
-                  <th className="px-5 py-3 font-medium">Item</th>
-                  <th className="px-5 py-3 font-medium text-right">Sent</th>
-                  <th className="px-5 py-3 font-medium text-right">Received</th>
-                  <th className="px-5 py-3 font-medium text-right">Value</th>
-                  <th className="px-5 py-3 font-medium text-right">Difference</th>
+                  <th className="px-5 py-3 font-medium">{t.transfer.item}</th>
+                  <th className="px-5 py-3 font-medium text-right">{t.transfer.sent}</th>
+                  <th className="px-5 py-3 font-medium text-right">{t.transfer.received}</th>
+                  <th className="px-5 py-3 font-medium text-right">{t.transfer.value}</th>
+                  <th className="px-5 py-3 font-medium text-right">{t.transfer.difference}</th>
                 </tr>
               </thead>
               <tbody>
@@ -290,16 +292,16 @@ export default function TransferDetailPage() {
         </Card>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <FinancialCard label="Sent Value" value={totals.sent} />
-          <FinancialCard label="Received Value" value={totals.received} color="green" />
-          <FinancialCard label="Discrepancy" value={totals.discrepancy} color={totals.discrepancy > 0 ? 'red' : 'green'} />
+          <FinancialCard label={t.transfer.sentValue} value={totals.sent} />
+          <FinancialCard label={t.transfer.receivedValue} value={totals.received} color="green" />
+          <FinancialCard label={t.transfer.discrepancy} value={totals.discrepancy} color={totals.discrepancy > 0 ? 'red' : 'green'} />
         </div>
 
         {canReceive && (
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4">
               <CheckCircle className="h-4 w-4 text-[#888888]" />
-              <p className="text-sm font-medium text-[#111111]">Confirm Received Quantities</p>
+              <p className="text-sm font-medium text-[#111111]">{t.transfer.confirmReceipt}</p>
             </div>
             <form onSubmit={handleReceive} className="space-y-4">
               <div className="grid gap-3">
@@ -307,10 +309,10 @@ export default function TransferDetailPage() {
                   <div key={line.id} className="grid grid-cols-1 sm:grid-cols-[1fr,140px] gap-2 sm:gap-3 sm:items-end">
                     <div>
                       <p className="text-sm font-medium text-[#111111]">{line.item?.name}</p>
-                      <p className="text-xs text-[#888888]">Sent: {Number(line.quantity_sent)} {line.item?.unit}</p>
+                      <p className="text-xs text-[#888888]">{t.transfer.sentLabel(Number(line.quantity_sent), line.item?.unit ?? '')}</p>
                     </div>
                     <div>
-                      <Label htmlFor={`received-${line.id}`}>Received</Label>
+                      <Label htmlFor={`received-${line.id}`}>{t.transfer.received}</Label>
                       <Input
                         id={`received-${line.id}`}
                         type="number"
@@ -324,16 +326,16 @@ export default function TransferDetailPage() {
                 ))}
               </div>
               <div>
-                <Label htmlFor="receipt-note">Receipt Note</Label>
+                <Label htmlFor="receipt-note">{t.transfer.receiptNote}</Label>
                 <Textarea
                   id="receipt-note"
                   value={receiptNote}
                   onChange={e => setReceiptNote(e.target.value)}
-                  placeholder="Optional note about the received transfer"
+                  placeholder={t.transfer.receiptNotePlaceholder}
                 />
               </div>
               <div className="flex justify-end">
-                <Button type="submit" loading={submitting}>Submit Receipt</Button>
+                <Button type="submit" loading={submitting}>{t.transfer.submitReceipt}</Button>
               </div>
             </form>
           </Card>
@@ -343,28 +345,28 @@ export default function TransferDetailPage() {
           <Card className="p-5">
             <div className="flex items-center gap-2 mb-4">
               <ShieldCheck className="h-4 w-4 text-[#888888]" />
-              <p className="text-sm font-medium text-[#111111]">Admin Resolution</p>
+              <p className="text-sm font-medium text-[#111111]">{t.transfer.adminResolution}</p>
             </div>
             <form onSubmit={handleAdminResolve} className="space-y-4">
               <div>
-                <Label htmlFor="admin-status">Resolution</Label>
+                <Label htmlFor="admin-status">{t.transfer.resolution}</Label>
                 <Select id="admin-status" value={adminStatus} onChange={e => setAdminStatus(e.target.value as TransferStatus)}>
-                  <option value="admin_resolved">Mark Admin Resolved</option>
-                  <option value="confirmed">Accept As Confirmed</option>
-                  <option value="cancelled">Cancel Transfer</option>
+                  <option value="admin_resolved">{t.transfer.markAdminResolved}</option>
+                  <option value="confirmed">{t.transfer.acceptAsConfirmed}</option>
+                  <option value="cancelled">{t.transfer.cancelTransfer}</option>
                 </Select>
               </div>
               <div>
-                <Label htmlFor="admin-notes">Admin Notes</Label>
+                <Label htmlFor="admin-notes">{t.transfer.adminNotes}</Label>
                 <Textarea
                   id="admin-notes"
                   value={adminNotes}
                   onChange={e => setAdminNotes(e.target.value)}
-                  placeholder="Explain the resolution"
+                  placeholder={t.transfer.adminNotesPlaceholder}
                 />
               </div>
               <div className="flex justify-end">
-                <Button type="submit" loading={resolving}>Resolve Transfer</Button>
+                <Button type="submit" loading={resolving}>{t.transfer.resolveTransfer}</Button>
               </div>
             </form>
           </Card>
@@ -372,7 +374,7 @@ export default function TransferDetailPage() {
 
         {transfer.transfer_events && transfer.transfer_events.length > 0 && (
           <Card className="p-5">
-            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">Audit Trail</p>
+            <p className="text-xs font-medium text-[#444444] uppercase tracking-wider mb-4">{t.transfer.auditTrail}</p>
             <div className="space-y-2">
               {transfer.transfer_events.map(event => (
                 <div key={event.id} className="flex items-center justify-between gap-3 text-xs">

@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Ban, CheckCircle, KeyRound, Plus, ShieldCheck, UserCog } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { AppRole } from '@/types'
+import { useLanguage } from '@/contexts/language-context'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -68,6 +69,7 @@ async function adminFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export default function UsersPage() {
+  const { t } = useLanguage()
   const [users, setUsers] = useState<AdminUser[]>([])
   const [branches, setBranches] = useState<BranchOption[]>([])
   const [loading, setLoading] = useState(true)
@@ -130,7 +132,7 @@ export default function UsersPage() {
           temporaryPassword,
         }),
       })
-      toast.success('User created')
+      toast.success(t.users.successCreate)
       setCreateOpen(false)
       await loadUsers()
     } catch (err) {
@@ -150,7 +152,7 @@ export default function UsersPage() {
           active,
         }),
       })
-      toast.success(active ? 'User activated' : 'User deactivated')
+      toast.success(active ? t.users.successActivate : t.users.successDeactivate)
       await loadUsers()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not update user.')
@@ -172,7 +174,7 @@ export default function UsersPage() {
           temporaryPassword: resetPassword,
         }),
       })
-      toast.success('Temporary password set')
+      toast.success(t.users.successReset)
       setResetTarget(null)
       setResetPassword('')
       await loadUsers()
@@ -187,17 +189,17 @@ export default function UsersPage() {
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-6xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Users</h1>
-          <p className="text-sm text-[#888888] mt-0.5">Super-admin managed access</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.users.title}</h1>
+          <p className="text-sm text-[#888888] mt-0.5">{t.users.subtitle}</p>
         </div>
         <Button onClick={openCreate}>
           <Plus className="h-4 w-4" />
-          Add User
+          {t.users.add}
         </Button>
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-sm text-[#444444]">Loading...</div>
+        <div className="py-16 text-center text-sm text-[#444444]">{t.common.loading}</div>
       ) : error ? (
         <Card className="p-5 bg-white">
           <p className="text-sm text-red-600">{error}</p>
@@ -205,8 +207,8 @@ export default function UsersPage() {
       ) : users.length === 0 ? (
         <div className="py-16 text-center">
           <UserCog className="h-8 w-8 text-[#D1D5DB] mx-auto mb-3" />
-          <p className="text-sm text-[#888888] mb-1">No users yet</p>
-          <button onClick={openCreate} className="text-xs text-[#E8231A] hover:underline">Create the first manager</button>
+          <p className="text-sm text-[#888888] mb-1">{t.users.empty}</p>
+          <button onClick={openCreate} className="text-xs text-[#E8231A] hover:underline">{t.users.emptyAdd}</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -217,7 +219,7 @@ export default function UsersPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <p className="font-semibold text-[#111111] text-sm truncate">{user.full_name || user.username}</p>
                     <Badge variant={user.active ? 'success' : 'destructive'}>
-                      {user.active ? 'Active' : 'Inactive'}
+                      {user.active ? t.users.active : t.users.inactive}
                     </Badge>
                   </div>
                   <p className="text-xs text-[#888888] font-mono">{user.username}</p>
@@ -225,19 +227,19 @@ export default function UsersPage() {
                 </div>
                 <Badge variant={user.role === 'super_admin' ? 'accent' : 'info'}>
                   {user.role === 'super_admin' && <ShieldCheck className="h-3 w-3" />}
-                  {user.role === 'super_admin' ? 'Super Admin' : 'Manager'}
+                  {user.role === 'super_admin' ? t.users.roleSuperAdmin : t.nav.branchManager}
                 </Badge>
               </div>
 
               <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-[#F0F0F0]">
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Branch</p>
-                  <p className="text-xs text-[#111111]">{user.branch?.name ?? 'All branches'}</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.users.fieldBranch}</p>
+                  <p className="text-xs text-[#111111]">{user.branch?.name ?? t.users.allBranches}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">Password</p>
+                  <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.users.passwordLabel}</p>
                   <p className="text-xs text-[#111111]">
-                    {user.must_change_password ? 'Temporary' : 'Changed'}
+                    {user.must_change_password ? t.users.temporary : t.users.changed}
                   </p>
                 </div>
               </div>
@@ -245,17 +247,17 @@ export default function UsersPage() {
               <div className="flex flex-wrap justify-end gap-2 mt-4">
                 <Button variant="outline" size="sm" onClick={() => { setResetTarget(user); setResetPassword('') }}>
                   <KeyRound className="h-3.5 w-3.5" />
-                  Reset Password
+                  {t.users.resetPassword}
                 </Button>
                 {user.active ? (
                   <Button variant="destructive" size="sm" onClick={() => setActive(user, false)}>
                     <Ban className="h-3.5 w-3.5" />
-                    Deactivate
+                    {t.users.deactivate}
                   </Button>
                 ) : (
                   <Button variant="secondary" size="sm" onClick={() => setActive(user, true)}>
                     <CheckCircle className="h-3.5 w-3.5" />
-                    Activate
+                    {t.users.activate}
                   </Button>
                 )}
               </div>
@@ -264,34 +266,34 @@ export default function UsersPage() {
         </div>
       )}
 
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} title="Add User">
+      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} title={t.users.dialogAdd}>
         <form onSubmit={createUser} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="username">Username</Label>
-              <Input id="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="hamra.manager" required />
+              <Label htmlFor="username">{t.users.fieldUsername}</Label>
+              <Input id="username" value={username} onChange={e => setUsername(e.target.value)} placeholder={t.users.fieldUsernamePlaceholder} required />
             </div>
             <div>
-              <Label htmlFor="mobile">Mobile Number</Label>
-              <Input id="mobile" type="tel" value={mobileNumber} onChange={e => setMobileNumber(e.target.value)} placeholder="+96170123456" required />
+              <Label htmlFor="mobile">{t.users.fieldMobile}</Label>
+              <Input id="mobile" type="tel" value={mobileNumber} onChange={e => setMobileNumber(e.target.value)} placeholder={t.users.fieldMobilePlaceholder} required />
             </div>
           </div>
 
           <div>
-            <Label htmlFor="full-name">Full Name</Label>
-            <Input id="full-name" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Branch Manager" />
+            <Label htmlFor="full-name">{t.users.fieldFullName}</Label>
+            <Input id="full-name" value={fullName} onChange={e => setFullName(e.target.value)} placeholder={t.users.fieldFullNamePlaceholder} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="role">Role</Label>
+              <Label htmlFor="role">{t.users.fieldRole}</Label>
               <Select id="role" value={role} onChange={e => setRole(e.target.value as AppRole)}>
-                <option value="branch_manager">Branch Manager</option>
-                <option value="super_admin">Super Admin</option>
+                <option value="branch_manager">{t.users.roleBranchManager}</option>
+                <option value="super_admin">{t.users.roleSuperAdmin}</option>
               </Select>
             </div>
             <div>
-              <Label htmlFor="branch">Branch</Label>
+              <Label htmlFor="branch">{t.users.fieldBranch}</Label>
               <Select
                 id="branch"
                 value={branchId}
@@ -299,7 +301,7 @@ export default function UsersPage() {
                 disabled={role === 'super_admin'}
                 required={role === 'branch_manager'}
               >
-                <option value="">Select branch...</option>
+                <option value="">{t.common.selectBranch}</option>
                 {branches.map(branch => (
                   <option key={branch.id} value={branch.id}>{branch.name}</option>
                 ))}
@@ -308,7 +310,7 @@ export default function UsersPage() {
           </div>
 
           <div>
-            <Label htmlFor="temporary-password">Temporary Password</Label>
+            <Label htmlFor="temporary-password">{t.users.fieldTempPassword}</Label>
             <Input
               id="temporary-password"
               type="password"
@@ -320,19 +322,19 @@ export default function UsersPage() {
           </div>
 
           <div className="flex gap-2 justify-end pt-2">
-            <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Create User</Button>
+            <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>{t.users.cancel}</Button>
+            <Button type="submit" loading={saving}>{t.users.createUser}</Button>
           </div>
         </form>
       </Dialog>
 
-      <Dialog open={!!resetTarget} onClose={() => setResetTarget(null)} title="Reset Password">
+      <Dialog open={!!resetTarget} onClose={() => setResetTarget(null)} title={t.users.dialogReset}>
         <form onSubmit={resetUserPassword} className="space-y-4">
           <p className="text-sm text-[#888888]">
-            Set a new temporary password for <span className="text-[#111111] font-medium">{resetTarget?.username}</span>.
+            {resetTarget ? t.users.resetConfirm(resetTarget.username) : ''}
           </p>
           <div>
-            <Label htmlFor="reset-password">Temporary Password</Label>
+            <Label htmlFor="reset-password">{t.users.fieldTempPassword}</Label>
             <Input
               id="reset-password"
               type="password"
@@ -343,8 +345,8 @@ export default function UsersPage() {
             />
           </div>
           <div className="flex gap-2 justify-end pt-2">
-            <Button type="button" variant="ghost" onClick={() => setResetTarget(null)}>Cancel</Button>
-            <Button type="submit" loading={resetting}>Reset Password</Button>
+            <Button type="button" variant="ghost" onClick={() => setResetTarget(null)}>{t.users.cancel}</Button>
+            <Button type="submit" loading={resetting}>{t.users.resetPassword}</Button>
           </div>
         </form>
       </Dialog>

@@ -3,6 +3,7 @@
 import { FormEvent, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { useLanguage } from '@/contexts/language-context'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -10,6 +11,7 @@ import { Label } from '@/components/ui/label'
 
 export default function PasswordPage() {
   const router = useRouter()
+  const { t } = useLanguage()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -20,12 +22,12 @@ export default function PasswordPage() {
     setError('')
 
     if (password.length < 8) {
-      setError('Password must be at least 8 characters.')
+      setError(t.password.errorLength)
       return
     }
 
     if (password !== confirmPassword) {
-      setError('Passwords do not match.')
+      setError(t.password.errorMatch)
       return
     }
 
@@ -44,7 +46,7 @@ export default function PasswordPage() {
     setLoading(false)
 
     if (profileError) {
-      setError('Your password was saved, but we could not update your session. Please sign out and sign back in.')
+      setError(t.password.errorSession)
       return
     }
 
@@ -60,13 +62,13 @@ export default function PasswordPage() {
     <div className="min-h-screen grid place-items-center px-4 py-10 bg-white">
       <Card className="w-full max-w-sm p-6 bg-white">
         <div className="mb-6">
-          <h1 className="text-xl font-semibold text-[#111111]">Set New Password</h1>
-          <p className="mt-1 text-sm text-[#888888]">Replace the temporary password before continuing.</p>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.password.title}</h1>
+          <p className="mt-1 text-sm text-[#888888]">{t.password.subtitle}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <Label htmlFor="new-password">New Password</Label>
+            <Label htmlFor="new-password">{t.password.newPassword}</Label>
             <Input
               id="new-password"
               type="password"
@@ -78,7 +80,7 @@ export default function PasswordPage() {
           </div>
 
           <div>
-            <Label htmlFor="confirm-password">Confirm Password</Label>
+            <Label htmlFor="confirm-password">{t.password.confirmPassword}</Label>
             <Input
               id="confirm-password"
               type="password"
@@ -97,10 +99,10 @@ export default function PasswordPage() {
 
           <div className="flex gap-2">
             <Button type="button" variant="ghost" onClick={signOut}>
-              Sign Out
+              {t.password.signOut}
             </Button>
             <Button type="submit" loading={loading} className="flex-1">
-              Continue
+              {t.password.continue}
             </Button>
           </div>
         </form>

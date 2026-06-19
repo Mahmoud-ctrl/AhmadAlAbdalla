@@ -5,6 +5,7 @@ import { ArrowDownUp, Boxes, Filter, Search } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { fetchBranches, fetchItems } from '@/lib/data-cache'
 import { useAppProfile } from '@/contexts/profile-context'
+import { useLanguage } from '@/contexts/language-context'
 import type { Branch, Item, TransferRow, TransferStatus } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -30,15 +31,6 @@ type QuantityRow = {
   transferCount: number
 }
 
-const statuses: Array<{ value: TransferStatus | 'all'; label: string }> = [
-  { value: 'all', label: 'All Statuses' },
-  { value: 'pending_receipt', label: 'Pending Receipt' },
-  { value: 'confirmed', label: 'Confirmed' },
-  { value: 'needs_admin_review', label: 'Needs Review' },
-  { value: 'admin_resolved', label: 'Admin Resolved' },
-  { value: 'cancelled', label: 'Cancelled' },
-]
-
 function formatQty(value: number) {
   return new Intl.NumberFormat('en-US', {
     maximumFractionDigits: 2,
@@ -51,6 +43,7 @@ function dateInputValue(date: string) {
 
 export default function QuantitiesPage() {
   const profile = useAppProfile()
+  const { t } = useLanguage()
   const [branches, setBranches] = useState<Branch[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [transfers, setTransfers] = useState<TransferRow[]>([])
@@ -61,8 +54,11 @@ export default function QuantitiesPage() {
   const [itemFilter, setItemFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<TransferStatus | 'all'>('all')
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [selectedMonth, setSelectedMonth] = useState<string>(() => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [allTime, setAllTime] = useState(false)
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('branch')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
@@ -95,6 +91,17 @@ export default function QuantitiesPage() {
 
   const selectedBranchId = profile?.role === 'branch_manager' ? profile.branch_id ?? 'all' : branchFilter
   const isManager = profile?.role === 'branch_manager'
+
+  const { dateFrom, dateTo } = useMemo(() => {
+    if (allTime) return { dateFrom: '', dateTo: '' }
+    const [year, month] = selectedMonth.split('-').map(Number)
+    const from = new Date(year, month - 1, 1)
+    const to = new Date(year, month, 0)
+    return {
+      dateFrom: from.toISOString().split('T')[0],
+      dateTo: to.toISOString().split('T')[0],
+    }
+  }, [selectedMonth, allTime])
 
   const filteredTransfers = useMemo(() => {
     return transfers.filter(transfer => {
@@ -220,71 +227,57 @@ export default function QuantitiesPage() {
     return filteredRows
   }, [directionFilter, filteredTransfers, itemFilter, search, selectedBranchId, sortDir, sortKey])
 
-  const totals = useMemo(() => {
-    return rows.reduce(
-      (sum, row) => ({
-        incoming: sum.incoming + row.incomingReceived,
-        outgoing: sum.outgoing + row.outgoingSent,
-        pending: sum.pending + row.pendingIncoming,
-        discrepancy: sum.discrepancy + row.discrepancy,
-      }),
-      { incoming: 0, outgoing: 0, pending: 0, discrepancy: 0 }
-    )
-  }, [rows])
-
   return (
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-7xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold text-[#111111]">Quantity Tracker</h1>
+          <h1 className="text-xl font-semibold text-[#111111]">{t.quantities.title}</h1>
           <p className="text-sm text-[#888888] mt-0.5">
             {isManager
-              ? `In and out movement for ${profile?.branch?.name ?? 'your branch'}`
-              : 'Total item quantities across all branches'}
+              ? t.quantities.subtitleManager(profile?.branch?.name ?? t.quantities.yourBranch)
+              : t.quantities.subtitleAdmin}
+            {!allTime && (
+              <span className="ml-2 text-xs font-medium text-[#E8231A]">
+                — {new Date(selectedMonth + '-01').toLocaleString('en-US', { month: 'long', year: 'numeric' })}
+              </span>
+            )}
           </p>
         </div>
         <Badge variant={isManager ? 'info' : 'accent'}>
-          {isManager ? 'Branch scoped' : 'Super admin view'}
+          {isManager ? t.quantities.branchScoped : t.quantities.superAdminView}
         </Badge>
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-        <Metric label="Incoming Received" value={formatQty(totals.incoming)} />
-        <Metric label="Outgoing Sent" value={formatQty(totals.outgoing)} />
-        <Metric label="Pending Incoming" value={formatQty(totals.pending)} tone="amber" />
-        <Metric label="Discrepancy Qty" value={formatQty(totals.discrepancy)} tone={totals.discrepancy > 0 ? 'red' : 'green'} />
       </div>
 
       <Card className="p-4 mb-5 bg-white">
         <div className="flex items-center gap-2 mb-4">
           <Filter className="h-4 w-4 text-[#888888]" />
-          <h2 className="text-sm font-medium text-[#111111]">Advanced Filters</h2>
+          <h2 className="text-sm font-medium text-[#111111]">{t.quantities.advancedFilters}</h2>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <div>
-            <Label htmlFor="search">Search</Label>
+            <Label htmlFor="search">{t.quantities.search}</Label>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-[#9CA3AF]" />
               <Input
                 id="search"
                 value={search}
                 onChange={event => setSearch(event.target.value)}
-                placeholder="Branch or item"
+                placeholder={t.quantities.searchPlaceholder}
                 className="pl-9"
               />
             </div>
           </div>
 
           <div>
-            <Label htmlFor="branch-filter">Branch</Label>
+            <Label htmlFor="branch-filter">{t.quantities.branch}</Label>
             <Select
               id="branch-filter"
               value={selectedBranchId}
               onChange={event => setBranchFilter(event.target.value)}
               disabled={isManager}
             >
-              <option value="all">All branches</option>
+              <option value="all">{t.quantities.allBranches}</option>
               {branches.map(branch => (
                 <option key={branch.id} value={branch.id}>{branch.name}</option>
               ))}
@@ -292,18 +285,18 @@ export default function QuantitiesPage() {
           </div>
 
           <div>
-            <Label htmlFor="direction-filter">Direction</Label>
+            <Label htmlFor="direction-filter">{t.quantities.direction}</Label>
             <Select id="direction-filter" value={directionFilter} onChange={event => setDirectionFilter(event.target.value as DirectionFilter)}>
-              <option value="all">Incoming + Outgoing</option>
-              <option value="incoming">Incoming Only</option>
-              <option value="outgoing">Outgoing Only</option>
+              <option value="all">{t.quantities.incomingOutgoing}</option>
+              <option value="incoming">{t.quantities.incomingOnly}</option>
+              <option value="outgoing">{t.quantities.outgoingOnly}</option>
             </Select>
           </div>
 
           <div>
-            <Label htmlFor="counterparty-filter">Counterparty</Label>
+            <Label htmlFor="counterparty-filter">{t.quantities.counterparty}</Label>
             <Select id="counterparty-filter" value={counterpartyFilter} onChange={event => setCounterpartyFilter(event.target.value)}>
-              <option value="all">All counterparties</option>
+              <option value="all">{t.quantities.allCounterparties}</option>
               {branches
                 .filter(branch => branch.id !== selectedBranchId)
                 .map(branch => (
@@ -313,9 +306,9 @@ export default function QuantitiesPage() {
           </div>
 
           <div>
-            <Label htmlFor="item-filter">Item</Label>
+            <Label htmlFor="item-filter">{t.quantities.item}</Label>
             <Select id="item-filter" value={itemFilter} onChange={event => setItemFilter(event.target.value)}>
-              <option value="all">All items</option>
+              <option value="all">{t.quantities.allItems}</option>
               {items.map(item => (
                 <option key={item.id} value={item.id}>{item.name} ({item.unit})</option>
               ))}
@@ -323,42 +316,58 @@ export default function QuantitiesPage() {
           </div>
 
           <div>
-            <Label htmlFor="status-filter">Status</Label>
+            <Label htmlFor="status-filter">{t.quantities.status}</Label>
             <Select id="status-filter" value={statusFilter} onChange={event => setStatusFilter(event.target.value as TransferStatus | 'all')}>
-              {statuses.map(status => (
-                <option key={status.value} value={status.value}>{status.label}</option>
-              ))}
+              <option value="all">{t.transfers.allStatuses}</option>
+              <option value="pending_receipt">{t.status.pending_receipt}</option>
+              <option value="confirmed">{t.status.confirmed}</option>
+              <option value="needs_admin_review">{t.status.needs_admin_review}</option>
+              <option value="admin_resolved">{t.status.admin_resolved}</option>
+              <option value="cancelled">{t.status.cancelled}</option>
             </Select>
           </div>
 
           <div>
-            <Label htmlFor="date-from">From</Label>
-            <Input id="date-from" type="date" value={dateFrom} onChange={event => setDateFrom(event.target.value)} />
+            <Label htmlFor="month-picker">{t.quantities.month}</Label>
+            <Input
+              id="month-picker"
+              type="month"
+              value={allTime ? '' : selectedMonth}
+              disabled={allTime}
+              onChange={event => { setSelectedMonth(event.target.value); setAllTime(false) }}
+            />
+          </div>
+
+          <div className="flex flex-col justify-end">
+            <label className="flex items-center gap-2 text-sm text-[#444444] cursor-pointer h-9 px-1">
+              <input
+                type="checkbox"
+                checked={allTime}
+                onChange={event => setAllTime(event.target.checked)}
+                className="rounded"
+              />
+              {t.quantities.showAllTime}
+            </label>
           </div>
 
           <div>
-            <Label htmlFor="date-to">To</Label>
-            <Input id="date-to" type="date" value={dateTo} onChange={event => setDateTo(event.target.value)} />
-          </div>
-
-          <div>
-            <Label htmlFor="sort-key">Sort By</Label>
+            <Label htmlFor="sort-key">{t.quantities.sortBy}</Label>
             <Select id="sort-key" value={sortKey} onChange={event => setSortKey(event.target.value as SortKey)}>
-              <option value="branch">Branch</option>
-              <option value="item">Item</option>
-              <option value="incoming">Incoming Received</option>
-              <option value="outgoing">Outgoing Sent</option>
-              <option value="pending">Pending Incoming</option>
-              <option value="discrepancy">Discrepancy</option>
-              <option value="net">Net Quantity</option>
+              <option value="branch">{t.quantities.branch}</option>
+              <option value="item">{t.quantities.item}</option>
+              <option value="incoming">{t.quantities.incomingReceived}</option>
+              <option value="outgoing">{t.quantities.outgoingSent}</option>
+              <option value="pending">{t.quantities.pendingIncoming}</option>
+              <option value="discrepancy">{t.quantities.discrepancy}</option>
+              <option value="net">{t.quantities.netQuantity}</option>
             </Select>
           </div>
 
           <div>
-            <Label htmlFor="sort-dir">Sort Direction</Label>
+            <Label htmlFor="sort-dir">{t.quantities.sortDirection}</Label>
             <Select id="sort-dir" value={sortDir} onChange={event => setSortDir(event.target.value as 'asc' | 'desc')}>
-              <option value="asc">Ascending</option>
-              <option value="desc">Descending</option>
+              <option value="asc">{t.quantities.ascending}</option>
+              <option value="desc">{t.quantities.descending}</option>
             </Select>
           </div>
         </div>
@@ -368,18 +377,18 @@ export default function QuantitiesPage() {
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[#E5E5E5]">
           <div className="flex items-center gap-2">
             <Boxes className="h-4 w-4 text-[#888888]" />
-            <h2 className="text-sm font-medium text-[#111111]">Branch Item Quantities</h2>
+            <h2 className="text-sm font-medium text-[#111111]">{t.quantities.branchItemQuantities}</h2>
           </div>
           <div className="flex items-center gap-1 text-xs text-[#888888]">
             <ArrowDownUp className="h-3.5 w-3.5" />
-            {rows.length} row{rows.length === 1 ? '' : 's'}
+            {t.quantities.rowCount(rows.length)}
           </div>
         </div>
 
         {loading ? (
-          <div className="px-6 py-12 text-center text-sm text-[#444444]">Loading...</div>
+          <div className="px-6 py-12 text-center text-sm text-[#444444]">{t.common.loading}</div>
         ) : rows.length === 0 ? (
-          <div className="px-6 py-12 text-center text-sm text-[#888888]">No quantities match the selected filters.</div>
+          <div className="px-6 py-12 text-center text-sm text-[#888888]">{t.quantities.noResults}</div>
         ) : (
           <>
             {/* Mobile card view */}
@@ -394,27 +403,27 @@ export default function QuantitiesPage() {
                         <p className="text-sm text-[#444444]">{row.itemName}</p>
                         <p className="text-xs text-[#888888]">{row.unit}</p>
                       </div>
-                      <p className="text-xs text-[#888888] font-mono shrink-0">{row.transferCount} lines</p>
+                      <p className="text-xs text-[#888888] font-mono shrink-0">{t.quantities.lineCount(row.transferCount)}</p>
                     </div>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                       <div className="flex justify-between gap-2">
-                        <span className="text-[#888888]">Incoming</span>
+                        <span className="text-[#888888]">{t.quantities.incoming}</span>
                         <span className="font-mono">{formatQty(row.incomingReceived)}</span>
                       </div>
                       <div className="flex justify-between gap-2">
-                        <span className="text-[#888888]">Outgoing</span>
+                        <span className="text-[#888888]">{t.quantities.outgoing}</span>
                         <span className="font-mono">{formatQty(row.outgoingSent)}</span>
                       </div>
                       <div className="flex justify-between gap-2">
-                        <span className="text-[#888888]">Pending</span>
+                        <span className="text-[#888888]">{t.quantities.pending}</span>
                         <span className="font-mono text-amber-500">{formatQty(row.pendingIncoming)}</span>
                       </div>
                       <div className="flex justify-between gap-2">
-                        <span className="text-[#888888]">Net</span>
+                        <span className="text-[#888888]">{t.quantities.net}</span>
                         <span className={`font-mono ${net < 0 ? 'text-red-500' : net > 0 ? 'text-green-500' : 'text-[#888888]'}`}>{formatQty(net)}</span>
                       </div>
                       <div className="flex justify-between gap-2">
-                        <span className="text-[#888888]">Discrepancy</span>
+                        <span className="text-[#888888]">{t.quantities.discrepancy}</span>
                         <span className={`font-mono ${row.discrepancy > 0 ? 'text-red-500' : 'text-[#888888]'}`}>{formatQty(row.discrepancy)}</span>
                       </div>
                     </div>
@@ -428,14 +437,14 @@ export default function QuantitiesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Branch</TableHead>
-                    <TableHead>Item</TableHead>
-                    <TableHead className="text-right">Incoming Received</TableHead>
-                    <TableHead className="text-right">Outgoing Sent</TableHead>
-                    <TableHead className="text-right">Pending Incoming</TableHead>
-                    <TableHead className="text-right">Net</TableHead>
-                    <TableHead className="text-right">Discrepancy</TableHead>
-                    <TableHead className="text-right">Lines</TableHead>
+                    <TableHead>{t.quantities.branch}</TableHead>
+                    <TableHead>{t.quantities.item}</TableHead>
+                    <TableHead className="text-right">{t.quantities.incomingReceived}</TableHead>
+                    <TableHead className="text-right">{t.quantities.outgoingSent}</TableHead>
+                    <TableHead className="text-right">{t.quantities.pendingIncoming}</TableHead>
+                    <TableHead className="text-right">{t.quantities.net}</TableHead>
+                    <TableHead className="text-right">{t.quantities.discrepancy}</TableHead>
+                    <TableHead className="text-right">{t.quantities.lines}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -468,16 +477,5 @@ export default function QuantitiesPage() {
         )}
       </Card>
     </div>
-  )
-}
-
-function Metric({ label, value, tone }: { label: string; value: string; tone?: 'amber' | 'green' | 'red' }) {
-  const valueColor = tone === 'amber' ? 'text-amber-500' : tone === 'green' ? 'text-green-500' : tone === 'red' ? 'text-red-500' : 'text-[#111111]'
-
-  return (
-    <Card className="p-4 bg-white">
-      <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-1">{label}</p>
-      <p className={`font-mono text-xl font-bold tabular ${valueColor}`}>{value}</p>
-    </Card>
   )
 }
