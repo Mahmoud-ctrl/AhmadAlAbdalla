@@ -567,7 +567,7 @@ function Pagination({
   )
 }
 
-type EditLine = { id: string; quantity_sent: string; unit_price_snapshot: string }
+type EditLine = { id: string; quantity_sent: string; quantity_received: string | null; unit_price_snapshot: string }
 
 function EditTransferDialog({
   transfer,
@@ -597,11 +597,12 @@ function EditTransferDialog({
     setLines(transfer.transfer_lines.map(l => ({
       id: l.id,
       quantity_sent: String(l.quantity_sent),
+      quantity_received: l.quantity_received !== null ? String(l.quantity_received) : null,
       unit_price_snapshot: String(l.unit_price_snapshot),
     })))
   }, [transfer])
 
-  function updateLine(id: string, field: keyof Omit<EditLine, 'id'>, value: string) {
+  function updateLine(id: string, field: keyof Omit<EditLine, 'id'>, value: string | null) {
     setLines(current => current.map(l => l.id === id ? { ...l, [field]: value } : l))
   }
 
@@ -633,6 +634,17 @@ function EditTransferDialog({
         toast.error(t.transfer.errorWholeNumber(origLine.item?.name ?? '', origLine.item?.unit ?? ''))
         return
       }
+      if (line.quantity_received !== null) {
+        const qtyR = parseFloat(line.quantity_received)
+        if (!Number.isFinite(qtyR) || qtyR < 0) {
+          toast.error(t.transfer.errorQtyNonNegative)
+          return
+        }
+        if (origLine && !isDecimalUnit(origLine.item?.unit ?? '') && !Number.isInteger(qtyR)) {
+          toast.error(t.transfer.errorWholeNumber(origLine.item?.name ?? '', origLine.item?.unit ?? ''))
+          return
+        }
+      }
       const price = parseFloat(line.unit_price_snapshot)
       if (!Number.isFinite(price) || price < 0) {
         toast.error(t.items.errorPrice)
@@ -663,6 +675,7 @@ function EditTransferDialog({
         .from('transfer_lines')
         .update({
           quantity_sent: parseFloat(line.quantity_sent),
+          quantity_received: line.quantity_received !== null ? parseFloat(line.quantity_received) : null,
           unit_price_snapshot: parseFloat(line.unit_price_snapshot),
         })
         .eq('id', line.id)
@@ -694,6 +707,7 @@ function EditTransferDialog({
         return {
           ...origLine,
           quantity_sent: parseFloat(edited.quantity_sent),
+          quantity_received: edited.quantity_received !== null ? parseFloat(edited.quantity_received) : null,
           unit_price_snapshot: parseFloat(edited.unit_price_snapshot),
         }
       }),
@@ -736,7 +750,7 @@ function EditTransferDialog({
               const edited = lines.find(l => l.id === origLine.id)
               if (!edited) return null
               return (
-                <div key={origLine.id} className="grid grid-cols-[1fr,110px,110px] gap-3 items-end px-4 py-3">
+                <div key={origLine.id} className="grid grid-cols-[1fr,100px,100px,110px] gap-3 items-end px-4 py-3">
                   <div>
                     <p className="text-sm font-medium text-[#111111]">{origLine.item?.name}</p>
                     <p className="text-xs text-[#888888]">{origLine.item?.unit}</p>
@@ -749,6 +763,17 @@ function EditTransferDialog({
                       step={isDecimalUnit(origLine.item?.unit ?? '') ? '0.01' : '1'}
                       value={edited.quantity_sent}
                       onChange={e => updateLine(origLine.id, 'quantity_sent', e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label>{t.transfer.received}</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step={isDecimalUnit(origLine.item?.unit ?? '') ? '0.01' : '1'}
+                      value={edited.quantity_received ?? ''}
+                      placeholder="—"
+                      onChange={e => updateLine(origLine.id, 'quantity_received', e.target.value === '' ? null : e.target.value)}
                     />
                   </div>
                   <div>
