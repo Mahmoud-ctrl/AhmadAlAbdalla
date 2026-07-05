@@ -26,6 +26,14 @@ type DraftLine = {
 
 const emptyLine = (): DraftLine => ({ itemId: '', quantity: '' })
 
+function todayInputValue() {
+  const d = new Date()
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 export default function NewTransferPage() {
   const router = useRouter()
   const profile = useAppProfile()
@@ -37,7 +45,7 @@ export default function NewTransferPage() {
 
   const [senderBranchId, setSenderBranchId] = useState('')
   const [receiverBranchId, setReceiverBranchId] = useState('')
-  const [sentAt, setSentAt] = useState(() => new Date().toISOString().split('T')[0])
+  const [sentAt, setSentAt] = useState(() => todayInputValue())
   const [notes, setNotes] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([emptyLine()])
 
@@ -52,10 +60,22 @@ export default function NewTransferPage() {
     load()
   }, [])
 
-  const effectiveSenderBranchId = profile?.role === 'super_admin' ? senderBranchId : profile?.branch_id
-  const senderBranch = profile?.role === 'super_admin'
+  const isSuperAdmin = profile?.role === 'super_admin'
+  const myBranches = useMemo(() => profile?.branches ?? [], [profile])
+  const needsSenderPicker = isSuperAdmin || myBranches.length > 1
+
+  const effectiveSenderBranchId = isSuperAdmin
+    ? senderBranchId
+    : myBranches.length === 1
+      ? myBranches[0].id
+      : senderBranchId
+
+  const senderBranch = isSuperAdmin
     ? branches.find(branch => branch.id === senderBranchId) ?? null
-    : profile?.branch
+    : myBranches.length === 1
+      ? myBranches[0]
+      : branches.find(branch => branch.id === senderBranchId) ?? null
+
   const availableReceivers = branches.filter(branch => branch.id !== effectiveSenderBranchId)
 
   const totals = useMemo(() => {
@@ -81,7 +101,7 @@ export default function NewTransferPage() {
     e.preventDefault()
 
     if (!effectiveSenderBranchId) {
-      toast.error(profile?.role === 'super_admin' ? t.newTransfer.errorNoSender : t.newTransfer.errorNoSenderBranch)
+      toast.error(needsSenderPicker ? t.newTransfer.errorNoSender : t.newTransfer.errorNoSenderBranch)
       return
     }
 
@@ -126,9 +146,9 @@ export default function NewTransferPage() {
     const { data, error } = await supabase.rpc('create_transfer', {
       p_receiver_branch_id: receiverBranchId,
       p_lines: payloadLines,
-      p_sent_at: profile?.role === 'super_admin' ? new Date(sentAt).toISOString() : new Date().toISOString(),
+      p_sent_at: isSuperAdmin ? new Date(sentAt).toISOString() : new Date().toISOString(),
       p_notes: notes.trim() || null,
-      p_sender_branch_id: profile?.role === 'super_admin' ? effectiveSenderBranchId : null,
+      p_sender_branch_id: needsSenderPicker ? effectiveSenderBranchId : null,
     })
 
     setSaving(false)
@@ -166,10 +186,10 @@ export default function NewTransferPage() {
           <div className="grid grid-cols-[1fr,auto,1fr] items-center gap-3">
             <div>
               <Label>{t.newTransfer.senderBranch}</Label>
-              {profile?.role === 'super_admin' ? (
+              {needsSenderPicker ? (
                 <Select value={senderBranchId} onChange={e => setSenderBranchId(e.target.value)}>
                   <option value="">{t.common.selectBranch}</option>
-                  {branches.map(branch => (
+                  {(isSuperAdmin ? branches : myBranches).map(branch => (
                     <option key={branch.id} value={branch.id}>{branch.name}</option>
                   ))}
                 </Select>
@@ -255,13 +275,13 @@ export default function NewTransferPage() {
         </Card>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {profile?.role === 'super_admin' && (
+          {isSuperAdmin && (
             <div>
               <Label htmlFor="sent-at">{t.newTransfer.sentDate}</Label>
               <Input id="sent-at" type="date" value={sentAt} onChange={e => setSentAt(e.target.value)} />
             </div>
           )}
-          <div className={profile?.role !== 'super_admin' ? 'sm:col-span-2' : ''}>
+          <div className={!isSuperAdmin ? 'sm:col-span-2' : ''}>
             <Label htmlFor="notes">{t.newTransfer.notes}</Label>
             <Textarea
               id="notes"

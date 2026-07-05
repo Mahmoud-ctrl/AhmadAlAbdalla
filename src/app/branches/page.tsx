@@ -83,20 +83,20 @@ export default function BranchesPage() {
 
   useEffect(() => { load() }, [])
 
-  const isSuperAdmin = profile?.role === 'super_admin'
+  const canManage = profile?.role === 'super_admin' || profile?.role === 'district_manager'
 
   function openAdd() {
-    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
+    if (!canManage) { toast.error(t.branches.errorAccess); return }
     setEditing(null); setName(''); setLocation(''); setDialogOpen(true)
   }
 
   function openEdit(b: Branch) {
-    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
+    if (!canManage) { toast.error(t.branches.errorAccess); return }
     setEditing(b); setName(b.name); setLocation(b.location ?? ''); setDialogOpen(true)
   }
 
   async function save() {
-    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
+    if (!canManage) { toast.error(t.branches.errorAccess); return }
     if (!name.trim()) { toast.error(t.branches.errorName); return }
     setSaving(true)
     const payload = { name: name.trim(), location: location.trim() || null }
@@ -113,7 +113,7 @@ export default function BranchesPage() {
   }
 
   async function confirmDelete(b: Branch) {
-    if (!isSuperAdmin) { toast.error(t.branches.errorAccess); return }
+    if (!canManage) { toast.error(t.branches.errorAccess); return }
     const { error } = await supabase.from('branches').delete().eq('id', b.id)
     if (error) {
       toast.error(error.code === '23503' ? t.branches.errorFK : branchMutationError(error))
@@ -133,7 +133,7 @@ export default function BranchesPage() {
           <h1 className="text-xl font-semibold text-[#111111]">{t.branches.title}</h1>
           <p className="text-sm text-[#888888] mt-0.5">{t.branches.subtitle(branches.length)}</p>
         </div>
-        {isSuperAdmin && (
+        {canManage && (
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4" />
             {t.branches.add}
@@ -143,7 +143,7 @@ export default function BranchesPage() {
 
       {loading ? (
         <div className="py-16 text-center text-sm text-[#444444]">{t.common.loading}</div>
-      ) : !isSuperAdmin ? (
+      ) : !canManage ? (
         <Card className="p-5 bg-white">
           <p className="text-sm font-medium text-[#111111]">{t.branches.errorAccess}</p>
           <p className="mt-1 text-sm text-[#888888]">{t.branches.errorAccessDesc}</p>

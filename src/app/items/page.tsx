@@ -57,15 +57,15 @@ export default function ItemsPage() {
 
   useEffect(() => { load() }, [])
 
-  const isSuperAdmin = profile?.role === 'super_admin'
+  const canManage = profile?.role === 'super_admin' || profile?.role === 'district_manager'
 
   function openAdd() {
-    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
+    if (!canManage) { toast.error(t.items.errorAccess); return }
     setEditing(null); setSelectedSuggestion(null); setName(''); setUnit(''); setPrice(''); setDialogOpen(true)
   }
 
   function openEdit(item: Item) {
-    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
+    if (!canManage) { toast.error(t.items.errorAccess); return }
     setEditing(item); setSelectedSuggestion(item); setName(item.name); setUnit(item.unit)
     setPrice(String(item.price_per_unit)); setDialogOpen(true)
   }
@@ -77,7 +77,7 @@ export default function ItemsPage() {
   }
 
   async function save() {
-    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
+    if (!canManage) { toast.error(t.items.errorAccess); return }
     if (!name.trim()) { toast.error(t.items.errorName); return }
     if (!unit.trim()) { toast.error(t.items.errorUnit); return }
     const priceNum = parseFloat(price)
@@ -98,7 +98,7 @@ export default function ItemsPage() {
   }
 
   async function confirmDelete(item: Item) {
-    if (!isSuperAdmin) { toast.error(t.items.errorAccess); return }
+    if (!canManage) { toast.error(t.items.errorAccess); return }
     const { error } = await supabase.from('items').delete().eq('id', item.id)
     if (error) {
       toast.error(error.code === '23503' ? t.items.errorFK : itemMutationError(error))
@@ -118,7 +118,7 @@ export default function ItemsPage() {
           <h1 className="text-xl font-semibold text-[#111111]">{t.items.title}</h1>
           <p className="text-sm text-[#888888] mt-0.5">{t.items.subtitle(items.length)}</p>
         </div>
-        {isSuperAdmin && (
+        {canManage && (
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4" />
             {t.items.add}
@@ -128,7 +128,7 @@ export default function ItemsPage() {
 
       {loading ? (
         <div className="py-16 text-center text-sm text-[#444444]">{t.common.loading}</div>
-      ) : !isSuperAdmin ? (
+      ) : !canManage ? (
         <Card className="p-5 bg-white">
           <p className="text-sm font-medium text-[#111111]">{t.items.errorAccess}</p>
           <p className="mt-1 text-sm text-[#888888]">{t.items.errorAccessDesc}</p>

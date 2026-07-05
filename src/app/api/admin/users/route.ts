@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { adminAuthErrorResponse, requireSuperAdmin } from '@/lib/admin-auth'
-import { createAppUser, resetAppUserPassword } from '@/lib/user-admin'
+import { createAppUser, resetAppUserPassword, setDistrictManagerBranches } from '@/lib/user-admin'
 import { getSupabaseAdmin } from '@/lib/supabase-admin'
 import type { AppRole } from '@/types'
 
@@ -12,14 +12,16 @@ type CreateUserBody = {
   temporaryPassword?: string
   fullName?: string | null
   branchId?: string | null
+  branchIds?: string[]
   role?: AppRole
 }
 
 type PatchUserBody = {
   id?: string
-  action?: 'set_active' | 'reset_password'
+  action?: 'set_active' | 'reset_password' | 'set_branches'
   active?: boolean
   temporaryPassword?: string
+  branchIds?: string[]
 }
 
 export async function GET(request: Request) {
@@ -30,7 +32,7 @@ export async function GET(request: Request) {
     const [{ data: users, error: usersError }, { data: branches, error: branchesError }] = await Promise.all([
       supabaseAdmin
         .from('user_profiles')
-        .select('id, username, mobile_number, full_name, branch_id, role, active, must_change_password, created_at, updated_at, branch:branches(id,name)')
+        .select('id, username, mobile_number, full_name, branch_id, role, active, must_change_password, created_at, updated_at, branch:branches!user_profiles_branch_id_fkey(id,name), district_manager_branches(branch:branches(id,name))')
         .order('role', { ascending: false })
         .order('username'),
       supabaseAdmin
@@ -66,7 +68,8 @@ export async function POST(request: Request) {
       mobileNumber: body.mobileNumber ?? '',
       temporaryPassword: body.temporaryPassword ?? '',
       fullName: body.fullName ?? null,
-      branchId: body.role === 'super_admin' ? null : body.branchId ?? null,
+      branchId: body.role === 'branch_manager' ? body.branchId ?? null : null,
+      branchIds: body.role === 'district_manager' ? body.branchIds ?? [] : undefined,
       role: body.role ?? 'branch_manager',
       createdBy: actor.id,
       mustChangePassword: true,
@@ -89,6 +92,15 @@ export async function PATCH(request: Request) {
 
     if (body.action === 'reset_password') {
       await resetAppUserPassword(body.id, body.temporaryPassword ?? '')
+      return NextResponse.json({ ok: true })
+    }
+
+    if (body.action === 'set_branches') {
+      if (!Array.isArray(body.branchIds) || body.branchIds.length === 0) {
+        return NextResponse.json({ error: 'Select at least one branch.' }, { status: 400 })
+      }
+
+      await setDistrictManagerBranches(body.id, body.branchIds)
       return NextResponse.json({ ok: true })
     }
 

@@ -5,10 +5,9 @@ import type { AppRole } from '@/types'
 export type AppProfile = {
   id: string
   role: AppRole
-  branch_id: string | null
+  branches: { id: string; name: string }[]
   username: string
   full_name: string | null
-  branch: { id: string; name: string } | null
 }
 
 export const ProfileContext = createContext<AppProfile | null>(null)

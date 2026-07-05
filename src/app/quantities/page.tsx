@@ -37,8 +37,12 @@ function formatQty(value: number) {
   }).format(value)
 }
 
-function dateInputValue(date: string) {
-  return new Date(date).toISOString().split('T')[0]
+function dateInputValue(date: Date | string) {
+  const d = new Date(date)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 export default function QuantitiesPage() {
@@ -83,14 +87,26 @@ export default function QuantitiesPage() {
     load()
   }, [])
 
-  useEffect(() => {
-    if (profile?.role === 'branch_manager' && profile.branch_id) {
-      setBranchFilter(profile.branch_id)
-    }
-  }, [profile])
+  const myBranchIds = useMemo(() => (profile?.branches ?? []).map(b => b.id), [profile])
+  const isBranchManager = profile?.role === 'branch_manager'
+  const isDistrictManager = profile?.role === 'district_manager'
+  const isManager = isBranchManager || isDistrictManager
 
-  const selectedBranchId = profile?.role === 'branch_manager' ? profile.branch_id ?? 'all' : branchFilter
-  const isManager = profile?.role === 'branch_manager'
+  useEffect(() => {
+    if (isBranchManager && myBranchIds[0]) {
+      setBranchFilter(myBranchIds[0])
+    }
+  }, [isBranchManager, myBranchIds])
+
+  const selectedBranchId = isBranchManager ? (myBranchIds[0] ?? 'all') : branchFilter
+
+  // null = true global "all" (super_admin only); otherwise the exact set of
+  // branch ids the current view is scoped to.
+  const scopeBranchIds = useMemo<string[] | null>(() => {
+    if (selectedBranchId !== 'all') return [selectedBranchId]
+    if (isManager) return myBranchIds
+    return null
+  }, [selectedBranchId, isManager, myBranchIds])
 
   const { dateFrom, dateTo } = useMemo(() => {
     if (allTime) return { dateFrom: '', dateTo: '' }
@@ -98,8 +114,8 @@ export default function QuantitiesPage() {
     const from = new Date(year, month - 1, 1)
     const to = new Date(year, month, 0)
     return {
-      dateFrom: from.toISOString().split('T')[0],
-      dateTo: to.toISOString().split('T')[0],
+      dateFrom: dateInputValue(from),
+      dateTo: dateInputValue(to),
     }
   }, [selectedMonth, allTime])
 
@@ -111,17 +127,17 @@ export default function QuantitiesPage() {
       if (dateFrom && sentDate < dateFrom) return false
       if (dateTo && sentDate > dateTo) return false
 
-      if (selectedBranchId !== 'all') {
-        const branchMatches = transfer.sender_branch_id === selectedBranchId || transfer.receiver_branch_id === selectedBranchId
+      if (scopeBranchIds) {
+        const branchMatches = scopeBranchIds.includes(transfer.sender_branch_id) || scopeBranchIds.includes(transfer.receiver_branch_id)
         if (!branchMatches) return false
 
-        if (directionFilter === 'incoming' && transfer.receiver_branch_id !== selectedBranchId) return false
-        if (directionFilter === 'outgoing' && transfer.sender_branch_id !== selectedBranchId) return false
+        if (directionFilter === 'incoming' && !scopeBranchIds.includes(transfer.receiver_branch_id)) return false
+        if (directionFilter === 'outgoing' && !scopeBranchIds.includes(transfer.sender_branch_id)) return false
 
         if (counterpartyFilter !== 'all') {
           const counterpartyMatches =
-            (transfer.sender_branch_id === selectedBranchId && transfer.receiver_branch_id === counterpartyFilter)
-            || (transfer.receiver_branch_id === selectedBranchId && transfer.sender_branch_id === counterpartyFilter)
+            (scopeBranchIds.includes(transfer.sender_branch_id) && transfer.receiver_branch_id === counterpartyFilter)
+            || (scopeBranchIds.includes(transfer.receiver_branch_id) && transfer.sender_branch_id === counterpartyFilter)
           if (!counterpartyMatches) return false
         }
       } else if (counterpartyFilter !== 'all') {
@@ -132,7 +148,7 @@ export default function QuantitiesPage() {
 
       return true
     })
-  }, [counterpartyFilter, dateFrom, dateTo, directionFilter, itemFilter, selectedBranchId, statusFilter, transfers])
+  }, [counterpartyFilter, dateFrom, dateTo, directionFilter, itemFilter, scopeBranchIds, statusFilter, transfers])
 
   const rows = useMemo(() => {
     const map = new Map<string, QuantityRow>()
@@ -160,6 +176,8 @@ export default function QuantitiesPage() {
       return next
     }
 
+    const showAllSides = scopeBranchIds === null
+
     for (const transfer of filteredTransfers) {
       const sender = transfer.sender_branch
       const receiver = transfer.receiver_branch
@@ -172,14 +190,14 @@ export default function QuantitiesPage() {
         const received = Number(line.quantity_received ?? 0)
         const difference = Math.abs(sent - received)
 
-        if (selectedBranchId === 'all' && directionFilter !== 'incoming') {
+        if (showAllSides && directionFilter !== 'incoming') {
           const senderRow = upsert(sender, item)
           senderRow.outgoingSent += sent
           senderRow.discrepancy += transfer.status === 'pending_receipt' ? 0 : difference
           senderRow.transferCount += 1
         }
 
-        if (selectedBranchId === 'all' && directionFilter !== 'outgoing') {
+        if (showAllSides && directionFilter !== 'outgoing') {
           const receiverRow = upsert(receiver, item)
           receiverRow.incomingReceived += received
           receiverRow.pendingIncoming += transfer.status === 'pending_receipt' ? sent : 0
@@ -187,14 +205,14 @@ export default function QuantitiesPage() {
           receiverRow.transferCount += 1
         }
 
-        if (selectedBranchId !== 'all' && transfer.sender_branch_id === selectedBranchId && directionFilter !== 'incoming') {
+        if (scopeBranchIds && scopeBranchIds.includes(transfer.sender_branch_id) && directionFilter !== 'incoming') {
           const senderRow = upsert(sender, item)
           senderRow.outgoingSent += sent
           senderRow.discrepancy += transfer.status === 'pending_receipt' ? 0 : difference
           senderRow.transferCount += 1
         }
 
-        if (selectedBranchId !== 'all' && transfer.receiver_branch_id === selectedBranchId && directionFilter !== 'outgoing') {
+        if (scopeBranchIds && scopeBranchIds.includes(transfer.receiver_branch_id) && directionFilter !== 'outgoing') {
           const receiverRow = upsert(receiver, item)
           receiverRow.incomingReceived += received
           receiverRow.pendingIncoming += transfer.status === 'pending_receipt' ? sent : 0
@@ -225,7 +243,7 @@ export default function QuantitiesPage() {
     })
 
     return filteredRows
-  }, [directionFilter, filteredTransfers, itemFilter, search, selectedBranchId, sortDir, sortKey])
+  }, [directionFilter, filteredTransfers, itemFilter, scopeBranchIds, search, sortDir, sortKey])
 
   return (
     <div className="px-4 py-5 sm:px-8 sm:py-8 max-w-7xl">
@@ -234,7 +252,7 @@ export default function QuantitiesPage() {
           <h1 className="text-xl font-semibold text-[#111111]">{t.quantities.title}</h1>
           <p className="text-sm text-[#888888] mt-0.5">
             {isManager
-              ? t.quantities.subtitleManager(profile?.branch?.name ?? t.quantities.yourBranch)
+              ? t.quantities.subtitleManager(profile?.branches.map(b => b.name).join(', ') || t.quantities.yourBranch)
               : t.quantities.subtitleAdmin}
             {!allTime && (
               <span className="ml-2 text-xs font-medium text-[#E8231A]">
@@ -244,7 +262,7 @@ export default function QuantitiesPage() {
           </p>
         </div>
         <Badge variant={isManager ? 'info' : 'accent'}>
-          {isManager ? t.quantities.branchScoped : t.quantities.superAdminView}
+          {isBranchManager ? t.quantities.branchScoped : isDistrictManager ? t.quantities.districtScoped : t.quantities.superAdminView}
         </Badge>
       </div>
 
@@ -275,10 +293,10 @@ export default function QuantitiesPage() {
               id="branch-filter"
               value={selectedBranchId}
               onChange={event => setBranchFilter(event.target.value)}
-              disabled={isManager}
+              disabled={isBranchManager}
             >
               <option value="all">{t.quantities.allBranches}</option>
-              {branches.map(branch => (
+              {(isDistrictManager ? branches.filter(branch => myBranchIds.includes(branch.id)) : branches).map(branch => (
                 <option key={branch.id} value={branch.id}>{branch.name}</option>
               ))}
             </Select>
@@ -298,7 +316,7 @@ export default function QuantitiesPage() {
             <Select id="counterparty-filter" value={counterpartyFilter} onChange={event => setCounterpartyFilter(event.target.value)}>
               <option value="all">{t.quantities.allCounterparties}</option>
               {branches
-                .filter(branch => branch.id !== selectedBranchId)
+                .filter(branch => !(scopeBranchIds?.includes(branch.id) ?? false))
                 .map(branch => (
                   <option key={branch.id} value={branch.id}>{branch.name}</option>
                 ))}

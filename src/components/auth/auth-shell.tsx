@@ -13,10 +13,22 @@ type CachedAuth = {
   profile: AppProfile & { active: boolean; must_change_password: boolean }
 }
 
-const adminOnlyRoutes = ['/branches', '/items', '/users']
+type RawProfileRow = {
+  id: string
+  active: boolean
+  must_change_password: boolean
+  role: AppProfile['role']
+  username: string
+  full_name: string | null
+  branch: { id: string; name: string } | null
+  district_manager_branches: { branch: { id: string; name: string } }[] | null
+}
 
-function isAdminOnlyRoute(pathname: string) {
-  return adminOnlyRoutes.some(route => pathname === route || pathname.startsWith(`${route}/`))
+const userAdminRoutes = ['/users']
+const catalogRoutes = ['/branches', '/items']
+
+function matchesRoute(pathname: string, routes: string[]) {
+  return routes.some(route => pathname === route || pathname.startsWith(`${route}/`))
 }
 
 export function AuthShell({ children }: { children: ReactNode }) {
@@ -53,7 +65,15 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
     if (path === '/password') { router.replace('/'); return }
 
-    if (isAdminOnlyRoute(path) && profile.role !== 'super_admin') {
+    if (matchesRoute(path, userAdminRoutes) && profile.role !== 'super_admin') {
+      router.replace('/'); return
+    }
+
+    if (
+      matchesRoute(path, catalogRoutes) &&
+      profile.role !== 'super_admin' &&
+      profile.role !== 'district_manager'
+    ) {
       router.replace('/'); return
     }
 
@@ -81,13 +101,13 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
       const profileResult = await supabase
         .from('user_profiles')
-        .select('id, active, must_change_password, role, branch_id, username, full_name, branch:branches(id,name)')
+        .select('id, active, must_change_password, role, username, full_name, branch:branches!user_profiles_branch_id_fkey(id,name), district_manager_branches(branch:branches(id,name))')
         .eq('id', session.user.id)
         .maybeSingle()
 
       if (cancelled) return
 
-      const rawProfile = profileResult.data as (AppProfile & { active: boolean; must_change_password: boolean }) | null
+      const rawProfile = profileResult.data as unknown as RawProfileRow | null
 
       if (!rawProfile || !rawProfile.active) {
         await supabase.auth.signOut()
@@ -95,16 +115,32 @@ export function AuthShell({ children }: { children: ReactNode }) {
         return
       }
 
-      const cached: CachedAuth = { profile: rawProfile }
+      const branches =
+        rawProfile.role === 'branch_manager'
+          ? (rawProfile.branch ? [rawProfile.branch] : [])
+          : rawProfile.role === 'district_manager'
+            ? (rawProfile.district_manager_branches ?? []).map(row => row.branch).filter(Boolean)
+            : []
+
+      const profile: AppProfile & { active: boolean; must_change_password: boolean } = {
+        id: rawProfile.id,
+        role: rawProfile.role,
+        branches,
+        username: rawProfile.username,
+        full_name: rawProfile.full_name,
+        active: rawProfile.active,
+        must_change_password: rawProfile.must_change_password,
+      }
+
+      const cached: CachedAuth = { profile }
       authRef.current = cached
 
       setAppProfile({
-        id: rawProfile.id,
-        role: rawProfile.role,
-        branch_id: rawProfile.branch_id,
-        username: rawProfile.username,
-        full_name: rawProfile.full_name,
-        branch: rawProfile.branch,
+        id: profile.id,
+        role: profile.role,
+        branches: profile.branches,
+        username: profile.username,
+        full_name: profile.full_name,
       })
 
       authInitialized.current = true

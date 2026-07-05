@@ -38,27 +38,39 @@ export function Nav() {
     { href: '/', label: t.nav.dashboard, icon: LayoutDashboard },
     { href: '/transfers', label: t.nav.transfers, icon: ArrowLeftRight },
     { href: '/quantities', label: t.nav.quantities, icon: Boxes },
-    { href: '/branches', label: t.nav.branches, icon: Building2, adminOnly: true },
-    { href: '/items', label: t.nav.items, icon: Package, adminOnly: true },
+    { href: '/branches', label: t.nav.branches, icon: Building2, catalogOnly: true },
+    { href: '/items', label: t.nav.items, icon: Package, catalogOnly: true },
     { href: '/report', label: t.nav.report, icon: BarChart3 },
-    { href: '/users', label: t.nav.users, icon: Users, adminOnly: true },
+    { href: '/users', label: t.nav.users, icon: Users, userAdminOnly: true },
   ]
 
+  const isSuperAdmin = profile?.role === 'super_admin'
+  const isDistrictManager = profile?.role === 'district_manager'
+
   const visibleLinks = useMemo(
-    () => links.filter(link => !link.adminOnly || profile?.role === 'super_admin'),
+    () =>
+      links.filter(link => {
+        if (link.userAdminOnly) return isSuperAdmin
+        if (link.catalogOnly) return isSuperAdmin || isDistrictManager
+        return true
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [profile?.role, lang]
   )
 
-  const primaryLinks = visibleLinks.filter(link => !link.adminOnly)
-  const secondaryLinks = visibleLinks.filter(link => link.adminOnly)
+  const primaryLinks = visibleLinks.filter(link => !link.catalogOnly && !link.userAdminOnly)
+  const secondaryLinks = visibleLinks.filter(link => link.catalogOnly || link.userAdminOnly)
   const secondaryActive = secondaryLinks.some(({ href }) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
   )
 
-  const roleLabel = profile?.role === 'super_admin' ? t.nav.superAdmin : t.nav.branchManager
+  const roleLabel = isSuperAdmin ? t.nav.superAdmin : isDistrictManager ? t.nav.districtManager : t.nav.branchManager
   const displayName = profile?.full_name || profile?.username || 'Manager'
-  const branchLabel = profile?.role === 'super_admin' ? t.nav.allBranches : profile?.branch?.name ?? t.nav.noBranchAssigned
+  const branchLabel = isSuperAdmin
+    ? t.nav.allBranches
+    : profile?.branches.length
+      ? profile.branches.map(b => b.name).join(', ')
+      : t.nav.noBranchAssigned
 
   async function signOut() {
     setSigningOut(true)

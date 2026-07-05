@@ -65,7 +65,11 @@ function formatQty(value: number) {
 }
 
 function dateInputValue(date: Date | string) {
-  return new Date(date).toISOString().split('T')[0]
+  const d = new Date(date)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function presetRange(preset: DatePreset) {
@@ -262,7 +266,9 @@ export default function ReportPage() {
 
     const excluded = new Set<string>()
     if (branchFilter !== 'all') excluded.add(branchFilter)
-    if (profile?.role === 'branch_manager' && profile.branch_id) excluded.add(profile.branch_id)
+    if (profile?.role === 'branch_manager' || profile?.role === 'district_manager') {
+      for (const branch of profile.branches) excluded.add(branch.id)
+    }
 
     return excluded.size > 0
       ? { ...data, rows: data.rows.filter(row => !excluded.has(row.branchId)) }
@@ -483,8 +489,8 @@ export default function ReportPage() {
                   value={datePreset === 'custom' || datePreset === 'all' ? '' : dateFrom.slice(0, 7)}
                   onChange={event => {
                     const [year, month] = event.target.value.split('-').map(Number)
-                    const from = new Date(year, month - 1, 1).toISOString().split('T')[0]
-                    const to = new Date(year, month, 0).toISOString().split('T')[0]
+                    const from = dateInputValue(new Date(year, month - 1, 1))
+                    const to = dateInputValue(new Date(year, month, 0))
                     setDatePreset('custom')
                     setDateFrom(from)
                     setDateTo(to)

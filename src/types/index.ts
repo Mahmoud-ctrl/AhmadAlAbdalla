@@ -11,7 +11,7 @@ export type Item = {
   price_per_unit: number
 }
 
-export type AppRole = 'super_admin' | 'branch_manager'
+export type AppRole = 'super_admin' | 'branch_manager' | 'district_manager'
 
 export type UserProfile = {
   id: string

@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Ban, CheckCircle, KeyRound, Plus, ShieldCheck, UserCog } from 'lucide-react'
+import { Ban, Building2, CheckCircle, KeyRound, Plus, ShieldCheck, UserCog } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { AppRole } from '@/types'
 import { useLanguage } from '@/contexts/language-context'
@@ -31,6 +31,7 @@ type AdminUser = {
   created_at: string
   updated_at: string
   branch: BranchOption | null
+  district_manager_branches: { branch: BranchOption }[]
 }
 
 type UsersResponse = {
@@ -76,16 +77,20 @@ export default function UsersPage() {
   const [error, setError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null)
+  const [manageBranchesTarget, setManageBranchesTarget] = useState<AdminUser | null>(null)
 
   const [username, setUsername] = useState('')
   const [mobileNumber, setMobileNumber] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState<AppRole>('branch_manager')
   const [branchId, setBranchId] = useState('')
+  const [branchIds, setBranchIds] = useState<string[]>([])
   const [temporaryPassword, setTemporaryPassword] = useState('')
   const [saving, setSaving] = useState(false)
   const [resetPassword, setResetPassword] = useState('')
   const [resetting, setResetting] = useState(false)
+  const [manageBranchIds, setManageBranchIds] = useState<string[]>([])
+  const [managingBranches, setManagingBranches] = useState(false)
 
   async function loadUsers() {
     setLoading(true)
@@ -112,12 +117,23 @@ export default function UsersPage() {
     setFullName('')
     setRole('branch_manager')
     setBranchId('')
+    setBranchIds([])
     setTemporaryPassword('')
     setCreateOpen(true)
   }
 
+  function toggleBranchId(id: string) {
+    setBranchIds(current => current.includes(id) ? current.filter(b => b !== id) : [...current, id])
+  }
+
   async function createUser(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
+
+    if (role === 'district_manager' && branchIds.length === 0) {
+      toast.error(t.users.selectAtLeastOneBranch)
+      return
+    }
+
     setSaving(true)
 
     try {
@@ -129,6 +145,7 @@ export default function UsersPage() {
           fullName,
           role,
           branchId: role === 'branch_manager' ? branchId : null,
+          branchIds: role === 'district_manager' ? branchIds : undefined,
           temporaryPassword,
         }),
       })
@@ -140,6 +157,45 @@ export default function UsersPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  function openManageBranches(user: AdminUser) {
+    setManageBranchIds(user.district_manager_branches.map(row => row.branch.id))
+    setManageBranchesTarget(user)
+  }
+
+  async function saveManageBranches(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault()
+    if (!manageBranchesTarget) return
+
+    if (manageBranchIds.length === 0) {
+      toast.error(t.users.selectAtLeastOneBranch)
+      return
+    }
+
+    setManagingBranches(true)
+
+    try {
+      await adminFetch('/api/admin/users', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: manageBranchesTarget.id,
+          action: 'set_branches',
+          branchIds: manageBranchIds,
+        }),
+      })
+      toast.success(t.users.successBranchesUpdated)
+      setManageBranchesTarget(null)
+      await loadUsers()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update branch assignments.')
+    } finally {
+      setManagingBranches(false)
+    }
+  }
+
+  function toggleManageBranchId(id: string) {
+    setManageBranchIds(current => current.includes(id) ? current.filter(b => b !== id) : [...current, id])
   }
 
   async function setActive(user: AdminUser, active: boolean) {
@@ -227,14 +283,24 @@ export default function UsersPage() {
                 </div>
                 <Badge variant={user.role === 'super_admin' ? 'accent' : 'info'}>
                   {user.role === 'super_admin' && <ShieldCheck className="h-3 w-3" />}
-                  {user.role === 'super_admin' ? t.users.roleSuperAdmin : t.nav.branchManager}
+                  {user.role === 'super_admin'
+                    ? t.users.roleSuperAdmin
+                    : user.role === 'district_manager'
+                      ? t.users.roleDistrictManager
+                      : t.nav.branchManager}
                 </Badge>
               </div>
 
               <div className="grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-[#F0F0F0]">
                 <div>
                   <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.users.fieldBranch}</p>
-                  <p className="text-xs text-[#111111]">{user.branch?.name ?? t.users.allBranches}</p>
+                  <p className="text-xs text-[#111111]">
+                    {user.role === 'district_manager'
+                      ? (user.district_manager_branches.length > 3
+                          ? t.users.branchesAssigned(user.district_manager_branches.length)
+                          : user.district_manager_branches.map(row => row.branch.name).join(', ') || t.users.branchesAssigned(0))
+                      : user.branch?.name ?? t.users.allBranches}
+                  </p>
                 </div>
                 <div>
                   <p className="text-[10px] text-[#9CA3AF] uppercase tracking-wider mb-0.5">{t.users.passwordLabel}</p>
@@ -245,6 +311,12 @@ export default function UsersPage() {
               </div>
 
               <div className="flex flex-wrap justify-end gap-2 mt-4">
+                {user.role === 'district_manager' && (
+                  <Button variant="outline" size="sm" onClick={() => openManageBranches(user)}>
+                    <Building2 className="h-3.5 w-3.5" />
+                    {t.users.manageBranches}
+                  </Button>
+                )}
                 <Button variant="outline" size="sm" onClick={() => { setResetTarget(user); setResetPassword('') }}>
                   <KeyRound className="h-3.5 w-3.5" />
                   {t.users.resetPassword}
@@ -289,25 +361,47 @@ export default function UsersPage() {
               <Label htmlFor="role">{t.users.fieldRole}</Label>
               <Select id="role" value={role} onChange={e => setRole(e.target.value as AppRole)}>
                 <option value="branch_manager">{t.users.roleBranchManager}</option>
+                <option value="district_manager">{t.users.roleDistrictManager}</option>
                 <option value="super_admin">{t.users.roleSuperAdmin}</option>
               </Select>
             </div>
-            <div>
-              <Label htmlFor="branch">{t.users.fieldBranch}</Label>
-              <Select
-                id="branch"
-                value={branchId}
-                onChange={e => setBranchId(e.target.value)}
-                disabled={role === 'super_admin'}
-                required={role === 'branch_manager'}
-              >
-                <option value="">{t.common.selectBranch}</option>
-                {branches.map(branch => (
-                  <option key={branch.id} value={branch.id}>{branch.name}</option>
-                ))}
-              </Select>
-            </div>
+            {role !== 'district_manager' && (
+              <div>
+                <Label htmlFor="branch">{t.users.fieldBranch}</Label>
+                <Select
+                  id="branch"
+                  value={branchId}
+                  onChange={e => setBranchId(e.target.value)}
+                  disabled={role === 'super_admin'}
+                  required={role === 'branch_manager'}
+                >
+                  <option value="">{t.common.selectBranch}</option>
+                  {branches.map(branch => (
+                    <option key={branch.id} value={branch.id}>{branch.name}</option>
+                  ))}
+                </Select>
+              </div>
+            )}
           </div>
+
+          {role === 'district_manager' && (
+            <div>
+              <Label>{t.users.fieldBranches}</Label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 rounded-md border border-[#DADADA] p-3 max-h-48 overflow-y-auto">
+                {branches.map(branch => (
+                  <label key={branch.id} className="flex items-center gap-2 text-xs text-[#444444] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="rounded"
+                      checked={branchIds.includes(branch.id)}
+                      onChange={() => toggleBranchId(branch.id)}
+                    />
+                    {branch.name}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <Label htmlFor="temporary-password">{t.users.fieldTempPassword}</Label>
@@ -347,6 +441,31 @@ export default function UsersPage() {
           <div className="flex gap-2 justify-end pt-2">
             <Button type="button" variant="ghost" onClick={() => setResetTarget(null)}>{t.users.cancel}</Button>
             <Button type="submit" loading={resetting}>{t.users.resetPassword}</Button>
+          </div>
+        </form>
+      </Dialog>
+
+      <Dialog open={!!manageBranchesTarget} onClose={() => setManageBranchesTarget(null)} title={t.users.dialogManageBranches}>
+        <form onSubmit={saveManageBranches} className="space-y-4">
+          <div>
+            <Label>{t.users.fieldBranches}</Label>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 rounded-md border border-[#DADADA] p-3 max-h-48 overflow-y-auto">
+              {branches.map(branch => (
+                <label key={branch.id} className="flex items-center gap-2 text-xs text-[#444444] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded"
+                    checked={manageBranchIds.includes(branch.id)}
+                    onChange={() => toggleManageBranchId(branch.id)}
+                  />
+                  {branch.name}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-2">
+            <Button type="button" variant="ghost" onClick={() => setManageBranchesTarget(null)}>{t.users.cancel}</Button>
+            <Button type="submit" loading={managingBranches}>{t.users.saveBranches}</Button>
           </div>
         </form>
       </Dialog>

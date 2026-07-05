@@ -11,6 +11,7 @@ export type CreateAppUserInput = {
   temporaryPassword: string
   fullName?: string | null
   branchId?: string | null
+  branchIds?: string[] | null
   role: AppRole
   createdBy?: string | null
   mustChangePassword?: boolean
@@ -40,6 +41,7 @@ function assertValidUserInput(input: {
   temporaryPassword: string
   role: AppRole
   branchId: string | null
+  branchIds: string[]
 }) {
   if (!USERNAME_PATTERN.test(input.username)) {
     throw new Error('Username must be 3-32 lowercase characters and may include numbers, dot, dash, or underscore.')
@@ -60,6 +62,14 @@ function assertValidUserInput(input: {
   if (input.role === 'branch_manager' && input.branchId === null) {
     throw new Error('Branch managers must be assigned to a branch.')
   }
+
+  if (input.role === 'district_manager' && input.branchId !== null) {
+    throw new Error('District managers must not have a single branch_id; use branch assignments.')
+  }
+
+  if (input.role === 'district_manager' && input.branchIds.length === 0) {
+    throw new Error('District managers must be assigned at least one branch.')
+  }
 }
 
 export async function createAppUser(input: CreateAppUserInput): Promise<CreatedAppUser> {
@@ -69,6 +79,7 @@ export async function createAppUser(input: CreateAppUserInput): Promise<CreatedA
   const authEmail = authEmailForUsername(username)
   const fullName = input.fullName?.trim() || null
   const branchId = input.branchId ?? null
+  const branchIds = input.branchIds ?? []
   const mustChangePassword = input.mustChangePassword ?? true
 
   assertValidUserInput({
@@ -77,6 +88,7 @@ export async function createAppUser(input: CreateAppUserInput): Promise<CreatedA
     temporaryPassword: input.temporaryPassword,
     role: input.role,
     branchId,
+    branchIds,
   })
 
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
@@ -117,6 +129,17 @@ export async function createAppUser(input: CreateAppUserInput): Promise<CreatedA
     throw new Error(`Created auth user but failed to create profile: ${profileError.message}`)
   }
 
+  if (input.role === 'district_manager') {
+    const { error: branchesError } = await supabaseAdmin
+      .from('district_manager_branches')
+      .insert(branchIds.map(branch_id => ({ user_id: data.user.id, branch_id })))
+
+    if (branchesError) {
+      await supabaseAdmin.auth.admin.deleteUser(data.user.id)
+      throw new Error(`Created user but failed to assign branches: ${branchesError.message}`)
+    }
+  }
+
   return {
     id: data.user.id,
     username,
@@ -141,6 +164,45 @@ export async function hasSuperAdminProfile() {
   }
 
   return (data?.length ?? 0) > 0
+}
+
+export async function setDistrictManagerBranches(userId: string, branchIds: string[]) {
+  if (branchIds.length === 0) {
+    throw new Error('District managers must be assigned at least one branch.')
+  }
+
+  const supabaseAdmin = getSupabaseAdmin()
+
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from('user_profiles')
+    .select('role')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (profileError) {
+    throw new Error(profileError.message)
+  }
+
+  if (!profile || profile.role !== 'district_manager') {
+    throw new Error('Only district manager accounts have branch assignments.')
+  }
+
+  const { error: deleteError } = await supabaseAdmin
+    .from('district_manager_branches')
+    .delete()
+    .eq('user_id', userId)
+
+  if (deleteError) {
+    throw new Error(deleteError.message)
+  }
+
+  const { error: insertError } = await supabaseAdmin
+    .from('district_manager_branches')
+    .insert(branchIds.map(branch_id => ({ user_id: userId, branch_id })))
+
+  if (insertError) {
+    throw new Error(insertError.message)
+  }
 }
 
 export async function resetAppUserPassword(userId: string, temporaryPassword: string) {

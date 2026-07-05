@@ -95,7 +95,7 @@ export default function TransferDetailPage() {
 
   const canReceive =
     transfer?.status === 'pending_receipt'
-    && (profile?.role === 'super_admin' || profile?.branch_id === transfer.receiver_branch_id)
+    && (profile?.role === 'super_admin' || (profile?.branches ?? []).some(b => b.id === transfer.receiver_branch_id))
 
   const canAdminResolve =
     profile?.role === 'super_admin'
